@@ -1,0 +1,5 @@
+{
+  "name": "AI Reading Agent",
+  "description": "An elegant book reader with an integrated AI agent. Upload your PDF books, read them in a clean interface, and ask the AI questions about the content. The AI uses RAG to find answers within the book and provides references to the source.",
+  "requestFramePermissions": []
+}
