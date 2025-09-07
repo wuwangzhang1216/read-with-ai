@@ -16,6 +16,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [chatInputValue, setChatInputValue] = useState("");
+  const [currentPage, setCurrentPage] = useState<number | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -24,17 +25,21 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       viewerRef.current.innerHTML = '';
       
       const blob = new Blob([book.fileBuffer], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob) + (currentPage ? `#page=${currentPage}` : '');
       
       PDFObject.embed(url, viewerRef.current);
       
-      // Clean up the object URL to avoid memory leaks
+      // Clean up the object URL to avoid memory leaks when the component unmounts
+      // or the book changes. The re-rendering for page change is handled by the effect dependency array.
       return () => {
         URL.revokeObjectURL(url);
       };
     }
-  }, [book]);
+  }, [book, currentPage]);
 
+  const handleNavigateToPage = (page: number) => {
+    setCurrentPage(page);
+  };
 
   const handleSendMessage = async (message: string) => {
     const userMessage: ChatMessage = { role: 'user', content: message };
@@ -72,7 +77,11 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       </header>
       
       <div className="flex-grow relative min-h-0 overflow-hidden">
-        <div ref={viewerRef} className="w-full h-full" />
+        <div 
+          ref={viewerRef} 
+          className="w-full h-full" 
+          style={{ transform: 'translateZ(0)' }} // Promote to its own rendering layer to prevent flicker
+        />
         <ChatPanel 
             isOpen={isChatOpen}
             onClose={() => setIsChatOpen(false)}
@@ -81,6 +90,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             isAiThinking={isAiThinking}
             inputValue={chatInputValue}
             onInputChange={setChatInputValue}
+            onNavigateToPage={handleNavigateToPage}
         />
       </div>
     </div>

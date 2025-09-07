@@ -19,6 +19,9 @@ function createFakeEmbedding(text: string): number[] {
   }
   // Normalize
   const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+  if (norm === 0) {
+    return embedding; // Return zero vector for empty/zero-sum text
+  }
   return embedding.map(v => v / norm);
 }
 
@@ -35,13 +38,17 @@ export async function generateEmbeddingsBatch(chunks: string[]): Promise<number[
 }
 
 function cosineSimilarity(vecA: number[], vecB: number[]): number {
-  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-  const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-  const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-  if (magnitudeA === 0 || magnitudeB === 0) {
-    return 0;
-  }
-  return dotProduct / (magnitudeA * magnitudeB);
+    if (!vecA || !vecB || vecA.length !== vecB.length) {
+        return 0;
+    }
+    const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+    const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+    const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
+    if (magnitudeA === 0 || magnitudeB === 0) {
+        return 0;
+    }
+    const similarity = dotProduct / (magnitudeA * magnitudeB);
+    return isNaN(similarity) ? 0 : similarity;
 }
 
 async function findRelevantChunks(book: Book, query: string, topK = 5): Promise<Chunk[]> {
@@ -52,13 +59,19 @@ async function findRelevantChunks(book: Book, query: string, topK = 5): Promise<
     similarity: cosineSimilarity(queryEmbedding, chunk.embedding),
   }));
 
-  similarities.sort((a, b) => b.similarity - a.similarity);
+  const relevant = similarities
+    .filter(s => s.similarity > 0.25) // Filter for meaningful similarity
+    .sort((a, b) => b.similarity - a.similarity);
 
-  return similarities.slice(0, topK).map(s => s.chunk);
+  return relevant.slice(0, topK).map(s => s.chunk);
 }
 
 export async function generateAnswer(book: Book, query: string): Promise<string> {
   const relevantChunks = await findRelevantChunks(book, query);
+
+  if (relevantChunks.length === 0) {
+    return "Based on the book's content, I could not find a relevant answer to your question.";
+  }
 
   const context = relevantChunks
     .map(chunk => `Source (Page ${chunk.pageNumber}):\n${chunk.content}`)
@@ -90,7 +103,7 @@ export async function generateAnswer(book: Book, query: string): Promise<string>
     let answer = response.text;
 
     // Ensure sources are cited if not already present
-    if (!/\[Source: \d+/.test(answer) && sourcePages.length > 0) {
+    if (!/\[Source:[^\]]*\d/.test(answer) && sourcePages.length > 0) {
         answer += ` [Source: ${sourcePages.join(', ')}]`;
     }
 
