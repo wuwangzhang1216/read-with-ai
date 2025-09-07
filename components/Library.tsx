@@ -1,7 +1,10 @@
 import React, { useState, useRef } from 'react';
-import { Book } from '../types';
+import { Book, Chunk } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
+import * as geminiService from '../services/geminiService';
+
+declare const pdfjsLib: any;
 
 interface LibraryProps {
   books: Book[];
@@ -22,15 +25,59 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
 
     setIsProcessing(true);
     setError(null);
-    setProcessingStatus('Processing...');
 
     try {
+      setProcessingStatus('Reading file...');
       const fileBuffer = await file.arrayBuffer();
 
+      if (typeof pdfjsLib === 'undefined') {
+        throw new Error('pdf.js library is not loaded.');
+      }
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js`;
+      
+      const pdf = await pdfjsLib.getDocument({ data: fileBuffer.slice(0) }).promise;
+      
+      let fullText = '';
+      const chunks: Omit<Chunk, 'id' | 'embedding'>[] = [];
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        setProcessingStatus(`Extracting text... (${i}/${pdf.numPages})`);
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = textContent.items.map((item: any) => item.str).join(' ');
+        fullText += pageText + '\n\n';
+        
+        // Simple chunking strategy (e.g., by paragraph or fixed size)
+        const pageChunks = pageText.match(/[\s\S]{1,1000}/g) || [];
+        pageChunks.forEach(chunkContent => {
+            chunks.push({
+                bookId: '', // will be set later
+                pageNumber: i,
+                content: chunkContent
+            });
+        });
+      }
+
+      setProcessingStatus('Generating embeddings...');
+      const chunkContents = chunks.map(c => c.content);
+      const embeddings = await geminiService.generateEmbeddingsBatch(chunkContents);
+
+      const bookId = `book-${Date.now()}`;
+
+      const finalChunks: Chunk[] = chunks.map((chunk, index) => ({
+        ...chunk,
+        id: `${bookId}-chunk-${index}`,
+        bookId: bookId,
+        embedding: embeddings[index]
+      }));
+
       const newBook: Book = {
-        id: `book-${Date.now()}`,
+        id: bookId,
         title: file.name.replace(/\.pdf$/i, ''),
         fileBuffer,
+        pageCount: pdf.numPages,
+        fullText,
+        chunks: finalChunks,
       };
 
       onAddBook(newBook);
@@ -97,10 +144,10 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
       {books.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-x-6 gap-y-10">
           {books.map(book => (
-            <div key={book.id} className="group relative text-center cursor-pointer">
+            <div key={book.id} className="group relative text-center">
               <div 
                 onClick={() => onSelectBook(book)} 
-                className="relative h-64 w-full rounded-md transition-all duration-300 transform group-hover:-translate-y-1"
+                className="relative h-64 w-full rounded-md transition-all duration-300 transform group-hover:-translate-y-1 cursor-pointer"
                 style={{ 
                     backgroundColor: 'var(--bg-secondary)', 
                     boxShadow: 'var(--card-shadow)',
@@ -110,6 +157,9 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
                 <div className="absolute inset-0 bg-gradient-to-t from-black/5 to-transparent rounded-md"></div>
                 <div className="absolute right-2 top-2 bottom-2 w-6 bg-white/70 rounded-sm" style={{ writingMode: 'vertical-rl' }}>
                   <span className="text-sm font-semibold tracking-wider text-center" style={{ color: 'var(--text-secondary)'}}>{book.title}</span>
+                </div>
+                 <div className="absolute bottom-2 left-2 px-2 py-1 text-xs rounded" style={{ backgroundColor: 'rgba(250, 248, 243, 0.8)', color: 'var(--text-secondary)'}}>
+                    {book.pageCount} pages
                 </div>
               </div>
               <h3 className="text-base font-semibold mt-4" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-serif)'}}>{book.title}</h3>

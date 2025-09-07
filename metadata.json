@@ -1,5 +1,5 @@
 {
   "name": "AI Reading Agent",
-  "description": "An elegant book reader. Upload and manage your PDF books and read them in a clean interface using your browser's built-in PDF viewer.",
+  "description": "An AI-powered reading agent that allows you to chat with your PDF books. Select text to ask questions or get summaries.",
   "requestFramePermissions": []
 }

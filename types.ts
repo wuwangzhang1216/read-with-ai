@@ -1,10 +1,20 @@
+export interface Chunk {
+  id: string;
+  bookId: string;
+  pageNumber: number;
+  content: string;
+  embedding: number[];
+}
+
 export interface Book {
   id: string;
   title: string;
   fileBuffer: ArrayBuffer;
+  pageCount: number;
+  fullText: string;
+  chunks: Chunk[];
 }
 
-// FIX: Add ChatMessage interface to resolve import error in ChatPanel.tsx
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;

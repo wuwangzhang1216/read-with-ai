@@ -1,6 +1,5 @@
 import React from 'react';
 
-// FIX: Update Icon components to accept a style prop.
 type IconProps = {
   className?: string;
   style?: React.CSSProperties;
@@ -30,21 +29,18 @@ export const BackIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) 
   </svg>
 );
 
-// FIX: Add ChatIcon to fix import error in BookViewer.tsx
 export const ChatIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
   <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.068.158 2.148.279 3.238.364.466.037.893.281 1.153.671L12 21l2.652-3.978c.26-.39.687-.634 1.153-.67 1.09-.086 2.17-.206 3.238-.365 1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
   </svg>
 );
 
-// FIX: Add SendIcon to fix import error in ChatPanel.tsx
 export const SendIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
   <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
   </svg>
 );
 
-// FIX: Add CloseIcon to fix import error in ChatPanel.tsx
 export const CloseIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) => (
   <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />

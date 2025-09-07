@@ -11,7 +11,6 @@ interface ChatPanelProps {
   chatHistory: ChatMessage[];
   onSendMessage: (message: string) => void;
   isAiThinking: boolean;
-  onGoToSource: (sourceId: number) => void;
   inputValue: string;
   onInputChange: (value: string) => void;
 }
@@ -22,7 +21,6 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   chatHistory, 
   onSendMessage, 
   isAiThinking, 
-  onGoToSource,
   inputValue,
   onInputChange
 }) => {
@@ -38,14 +36,17 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       scrollToBottom();
     }
   }, [chatHistory, isOpen]);
-
-  useEffect(() => {
-    if (isOpen && inputValue) {
+  
+    useEffect(() => {
+    if (isOpen) {
       inputRef.current?.focus();
-      const len = inputValue.length;
-      inputRef.current?.setSelectionRange(len, len);
+      if(inputValue) {
+        const len = inputValue.length;
+        inputRef.current?.setSelectionRange(len, len);
+      }
     }
   }, [isOpen, inputValue]);
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,16 +75,13 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
             {sources.map((match, index) => {
                const sourceIds = match[1].split(',').map(s => parseInt(s.trim(), 10));
                return sourceIds.map(id => (
-                  <button
+                  <span
                     key={`${index}-${id}`}
-                    onClick={() => onGoToSource(id)}
-                    className="px-2 py-0.5 text-xs font-mono rounded-md transition-colors"
+                    className="px-2 py-0.5 text-xs font-mono rounded-md"
                     style={{ backgroundColor: 'rgba(250, 248, 243, 0.1)', color: 'var(--text-light)'}}
-                    onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'rgba(250, 248, 243, 0.2)'}
-                    onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'rgba(250, 248, 243, 0.1)'}
                   >
-                    {id}
-                  </button>
+                    p.{id}
+                  </span>
                ));
             })}
           </div>
@@ -153,7 +151,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
                 handleSubmit(e);
               }
             }}
-            placeholder="Ask a question..."
+            placeholder="Ask a question, or paste text..."
             className="w-full pl-4 pr-12 py-2.5 border rounded-lg outline-none transition-all duration-200 resize-none focus:ring-2"
             style={{ 
               backgroundColor: 'var(--sidebar-bg-lighter)',
