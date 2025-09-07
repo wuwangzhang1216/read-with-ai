@@ -1,10 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { Book, Chunk } from '../types';
+import { Book } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
-import { generateEmbeddingsBatch } from '../services/geminiService';
-
-declare const pdfjsLib: any;
 
 interface LibraryProps {
   books: Book[];
@@ -25,73 +22,21 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
 
     setIsProcessing(true);
     setError(null);
+    setProcessingStatus('Processing...');
 
     try {
-      setProcessingStatus('Reading PDF...');
       const fileBuffer = await file.arrayBuffer();
-      
-      const pdfJsBuffer = fileBuffer.slice(0);
-
-      const pdf = await pdfjsLib.getDocument({
-        data: new Uint8Array(pdfJsBuffer),
-        cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/cmaps/',
-        cMapPacked: true,
-      }).promise;
-      const numPages = pdf.numPages;
-      const fullText: string[] = [];
-      const chunksWithoutEmbedding: Omit<Chunk, 'embedding'>[] = [];
-      let chunkIdCounter = 0;
-
-      const CHUNK_TARGET_SIZE = 1000; // chars
-      const CHUNK_OVERLAP = 150; // chars
-
-      for (let i = 1; i <= numPages; i++) {
-        setProcessingStatus(`Processing page ${i}/${numPages}...`);
-        const page = await pdf.getPage(i);
-        const textContent = await page.getTextContent();
-        const pageText = textContent.items.map((item: any) => item.str).join(' ');
-        fullText.push(pageText);
-
-        const sentences = pageText.replace(/([.?!])\s*(?=[A-Z])/g, "$1|").split("|");
-        let currentChunkText = "";
-        for (const sentence of sentences) {
-            const trimmedSentence = sentence.trim();
-            if (!trimmedSentence) continue;
-
-            if (currentChunkText.length + trimmedSentence.length > CHUNK_TARGET_SIZE) {
-                chunksWithoutEmbedding.push({ id: chunkIdCounter++, text: currentChunkText, page: i });
-                currentChunkText = currentChunkText.slice(-CHUNK_OVERLAP) + " " + trimmedSentence;
-            } else {
-                currentChunkText += " " + trimmedSentence;
-            }
-        }
-        if (currentChunkText.trim()) {
-            chunksWithoutEmbedding.push({ id: chunkIdCounter++, text: currentChunkText.trim(), page: i });
-        }
-      }
-      
-      const chunksToEmbed = chunksWithoutEmbedding.map(c => c.text);
-      setProcessingStatus(`Embedding ${chunksToEmbed.length} text chunks...`);
-
-      const embeddings = await generateEmbeddingsBatch(chunksToEmbed);
-      
-      const embeddedChunks: Chunk[] = chunksWithoutEmbedding.map((chunk, i) => ({
-        ...chunk,
-        embedding: embeddings[i] || [],
-      }));
 
       const newBook: Book = {
         id: `book-${Date.now()}`,
         title: file.name.replace(/\.pdf$/i, ''),
         fileBuffer,
-        fullText,
-        chunks: embeddedChunks,
       };
 
       onAddBook(newBook);
     } catch (err) {
-      console.error("Error processing PDF:", err);
-      setError("Failed to process PDF. Please ensure it's a valid file and try again.");
+      console.error("Error processing file:", err);
+      setError("Failed to process file. Please ensure it's a valid PDF and try again.");
     } finally {
       setIsProcessing(false);
       setProcessingStatus('');
@@ -168,7 +113,6 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
                 </div>
               </div>
               <h3 className="text-base font-semibold mt-4" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-serif)'}}>{book.title}</h3>
-              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)'}}>{book.fullText.length} pages</p>
               
               <button 
                 onClick={(e) => { e.stopPropagation(); onDeleteBook(book.id); }} 

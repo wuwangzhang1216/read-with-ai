@@ -24,38 +24,29 @@ export const DeleteIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }
     </svg>
 );
 
-export const SendIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
-  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-  </svg>
-);
-
 export const BackIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) => (
   <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
     <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
   </svg>
 );
 
-export const ChatIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) => (
-    <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193l-3.72-.838c-.352-.079-.696-.188-.982-.314a2.25 2.25 0 01-1.529-2.26c.272-1.604 1.723-2.85 3.45-2.85h1.228c.342 0 .65.103.904.284zM12.98 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193l-3.72-.838c-.352-.079-.696-.188-.982-.314a2.25 2.25 0 01-1.529-2.26c.272-1.604 1.723-2.85 3.45-2.85h1.228c.342 0 .65.103.904.284zM12.98 8.511L10.5 11.25m2.48 0L15.48 11.25m-2.48 0V5.625c0-.621-.504-1.125-1.125-1.125H6.375c-.621 0-1.125.504-1.125 1.125v8.25c0 .621.504 1.125 1.125 1.125h2.25m-2.25-4.5H9" />
-    </svg>
-);
-
-export const CloseIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) => (
-    <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-    </svg>
-);
-
-export const ChevronLeftIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
-  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+// FIX: Add ChatIcon to fix import error in BookViewer.tsx
+export const ChatIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
+  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.76c0 1.6 1.123 2.994 2.707 3.227 1.068.158 2.148.279 3.238.364.466.037.893.281 1.153.671L12 21l2.652-3.978c.26-.39.687-.634 1.153-.67 1.09-.086 2.17-.206 3.238-.365 1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
   </svg>
 );
 
-export const ChevronRightIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
-  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+// FIX: Add SendIcon to fix import error in ChatPanel.tsx
+export const SendIcon: React.FC<IconProps> = ({ className = "w-5 h-5", style }) => (
+  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+  </svg>
+);
+
+// FIX: Add CloseIcon to fix import error in ChatPanel.tsx
+export const CloseIcon: React.FC<IconProps> = ({ className = "w-6 h-6", style }) => (
+  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
   </svg>
 );
