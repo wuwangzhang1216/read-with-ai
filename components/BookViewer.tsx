@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Book } from '../types';
 import Spinner from './ui/Spinner';
 import { ChatIcon } from './icons/Icons';
@@ -23,6 +23,7 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const renderTaskRef = useRef<any>(null); // Ref to hold the current render task
   
   const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -30,9 +31,12 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
   const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState>({ visible: false, top: 0, left: 0, text: '' });
   
   const bookId = book.id;
+
+  // Effect for loading the PDF document
   useEffect(() => {
     setIsLoading(true);
     setError(null);
+    setPdfDoc(null); // Clear previous document
     const loadingTask = pdfjsLib.getDocument({ data: book.fileBuffer.slice(0) });
     loadingTask.promise.then((doc: any) => {
       setPdfDoc(doc);
@@ -40,26 +44,29 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
       console.error("Failed to load PDF document:", err);
       setError("Could not load the book file.");
     });
+    // Cleanup to destroy task if component unmounts while loading
+    return () => {
+      loadingTask.destroy();
+    }
   }, [bookId, book.fileBuffer]);
 
+  // Effect for rendering a page of the PDF
   useEffect(() => {
     if (!pdfDoc) return;
 
-    let isCancelled = false;
+    // Hide selection popup when page changes
+    if (selectionPopup.visible) {
+      setSelectionPopup(prev => ({ ...prev, visible: false }));
+    }
+
     const renderPage = async () => {
       setIsLoading(true);
-      if (selectionPopup.visible) {
-        setSelectionPopup({ ...selectionPopup, visible: false });
-      }
-
       try {
         const page = await pdfDoc.getPage(currentPage);
-        if (isCancelled) return;
         
         const canvas = canvasRef.current;
         const textLayer = textLayerRef.current;
-        const container = containerRef.current;
-        if (!canvas || !textLayer || !container) return;
+        if (!canvas || !textLayer) return;
         
         const viewport = page.getViewport({ scale: 2 });
         const outputScale = window.devicePixelRatio || 1;
@@ -73,17 +80,22 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
         canvas.style.height = `${Math.floor(viewport.height)}px`;
 
         const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
+        
+        const renderContext = { canvasContext: context, transform, viewport };
+        const task = page.render(renderContext);
+        renderTaskRef.current = task;
+        
+        await task.promise;
+        
+        renderTaskRef.current = null; // Clear task ref on successful completion
 
-        await page.render({ canvasContext: context, transform, viewport }).promise;
-        if (isCancelled) return;
-
+        // Render text layer
         textLayer.innerHTML = '';
         textLayer.style.width = canvas.style.width;
         textLayer.style.height = canvas.style.height;
         
         const textContent = await page.getTextContent();
-        if (isCancelled) return;
-
+        
         const textLayerRenderer = new pdfjsViewer.TextLayerBuilder({
             textLayerDiv: textLayer,
             pageIndex: page.pageIndex,
@@ -92,9 +104,12 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
         textLayerRenderer.setTextContent(textContent);
         textLayerRenderer.render();
         
-      } catch (err) {
-        console.error(`Failed to render page ${currentPage}:`, err);
-        setError("Could not display this page.");
+      } catch (err: any) {
+        // pdf.js throws a "RenderingCancelledException" error which we should ignore
+        if (err.name !== 'RenderingCancelledException') {
+          console.error(`Failed to render page ${currentPage}:`, err);
+          setError("Could not display this page.");
+        }
       } finally {
         setIsLoading(false);
       }
@@ -103,9 +118,13 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
     renderPage();
     
     return () => {
-      isCancelled = true;
+      // When the effect cleans up (e.g., page changes), cancel the ongoing render task.
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
+        renderTaskRef.current = null;
+      }
     };
-  }, [pdfDoc, currentPage, selectionPopup.visible]);
+  }, [pdfDoc, currentPage]); // Only re-run when the document or page number changes
   
   const handleMouseUp = () => {
     const selection = window.getSelection();
