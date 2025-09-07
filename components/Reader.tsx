@@ -3,7 +3,7 @@ import { Book, ChatMessage, Chunk } from '../types';
 import { generateAnswer, generateEmbedding } from '../services/geminiService';
 import BookViewer from './BookViewer';
 import ChatPanel from './ChatPanel';
-import { BackIcon, ChatIcon } from './icons/Icons';
+import { BackIcon, ChatIcon, ChevronLeftIcon, ChevronRightIcon } from './icons/Icons';
 
 interface ReaderProps {
   book: Book;
@@ -19,8 +19,8 @@ const cosineSimilarity = (vecA: number[], vecB: number[]): number => {
   let normB = 0;
   for (let i = 0; i < vecA.length; i++) {
     dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
   }
   if (normA === 0 || normB === 0) {
     return 0;
@@ -33,6 +33,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isChatPanelOpen, setIsChatPanelOpen] = useState(true);
+  const [chatInput, setChatInput] = useState('');
 
   const retrieveRelevantChunks = useCallback(async (question: string): Promise<Chunk[]> => {
     const chunksWithEmbeddings = book.chunks.filter(chunk => chunk.embedding && chunk.embedding.length > 0);
@@ -84,10 +85,15 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     const relevantChunks = await retrieveRelevantChunks(message);
     const aiResponseText = await generateAnswer(message, relevantChunks);
 
-    const sources = aiResponseText.match(/\[Source: (\d+(?:,\s*\d+)*)\]/);
+    const sources = aiResponseText.match(/\[Source: (\d+(?:,\s*\d+)*)\]/g);
     let sourceIds: number[] = [];
-    if (sources && sources[1]) {
-        sourceIds = sources[1].split(',').map(s => parseInt(s.trim(), 10));
+    if (sources) {
+        sources.forEach(sourceMatch => {
+            const ids = sourceMatch.match(/\d+/g);
+            if (ids) {
+                sourceIds.push(...ids.map(id => parseInt(id, 10)));
+            }
+        });
     }
 
     const assistantMessage: ChatMessage = {
@@ -106,17 +112,26 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       setCurrentPage(chunk.page);
     }
   };
+  
+  const handleAskAboutSelection = (selection: string) => {
+    setIsChatPanelOpen(true);
+    const formattedText = `Regarding this selection:\n\n> ${selection.replace(/\n/g, '\n> ')}\n\n`;
+    setChatInput(formattedText);
+  };
+
+  const handlePrevPage = () => setCurrentPage(prev => Math.max(1, prev - 1));
+  const handleNextPage = () => setCurrentPage(prev => Math.min(book.fullText.length, prev + 1));
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-900">
-      <header className="flex items-center justify-between p-4 border-b border-zinc-700 bg-zinc-800/50 backdrop-blur-sm z-30 flex-shrink-0">
+    <div className="flex flex-col h-screen" style={{ backgroundColor: 'var(--bg-secondary)'}}>
+      <header className="flex items-center justify-between p-4 border-b z-30 flex-shrink-0" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)'}}>
         <div className="flex items-center">
-            <button onClick={onBackToLibrary} className="p-2 rounded-md hover:bg-zinc-700 transition-colors">
+            <button onClick={onBackToLibrary} className="p-2 rounded-full hover:bg-gray-200/60 transition-colors" style={{ color: 'var(--text-secondary)' }}>
               <BackIcon className="w-6 h-6" />
             </button>
-            <h1 className="ml-4 text-xl font-semibold truncate">{book.title}</h1>
+            <h1 className="ml-4 text-xl font-semibold truncate" style={{ color: 'var(--text-primary)'}}>{book.title}</h1>
         </div>
-        <button onClick={() => setIsChatPanelOpen(!isChatPanelOpen)} className="p-2 rounded-md hover:bg-zinc-700 transition-colors">
+        <button onClick={() => setIsChatPanelOpen(!isChatPanelOpen)} className="p-2 rounded-full hover:bg-gray-200/60 transition-colors" style={{ color: 'var(--text-secondary)' }}>
             <ChatIcon className="w-6 h-6" />
         </button>
       </header>
@@ -124,7 +139,18 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         <BookViewer
           book={book}
           currentPage={currentPage}
+          onAskAboutSelection={handleAskAboutSelection}
         />
+        
+        {/* Backdrop */}
+        <div
+            className={`absolute inset-0 bg-black z-35 transition-opacity duration-300 ease-in-out
+            ${isChatPanelOpen ? 'opacity-40' : 'opacity-0 pointer-events-none'}`
+            }
+            onClick={() => setIsChatPanelOpen(false)}
+            aria-hidden="true"
+        />
+
         <ChatPanel
           isOpen={isChatPanelOpen}
           onClose={() => setIsChatPanelOpen(false)}
@@ -132,8 +158,29 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           onSendMessage={handleSendMessage}
           isAiThinking={isAiThinking}
           onGoToSource={handleGoToSource}
+          inputValue={chatInput}
+          onInputChange={setChatInput}
         />
       </div>
+       <footer className="flex-shrink-0 flex items-center justify-center gap-4 p-2 border-t z-10" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)'}}>
+        <button 
+          onClick={handlePrevPage} 
+          disabled={currentPage <= 1}
+          className="p-2 rounded-full hover:bg-gray-200/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          style={{ color: 'var(--text-secondary)' }}
+        >
+          <ChevronLeftIcon className="w-6 h-6" />
+        </button>
+        <span className="text-sm font-semibold" style={{ color: 'var(--text-secondary)', minWidth: '100px', textAlign: 'center' }}>Page {currentPage} of {book.fullText.length}</span>
+        <button 
+          onClick={handleNextPage} 
+          disabled={currentPage >= book.fullText.length}
+          className="p-2 rounded-full hover:bg-gray-200/60 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+           style={{ color: 'var(--text-secondary)' }}
+        >
+          <ChevronRightIcon className="w-6 h-6" />
+        </button>
+      </footer>
     </div>
   );
 };

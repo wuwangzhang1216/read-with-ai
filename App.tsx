@@ -54,14 +54,14 @@ const App: React.FC = () => {
   
   if (isInitializing) {
     return (
-        <div className="flex items-center justify-center h-screen bg-zinc-900">
-            <h1 className="text-2xl font-medium text-zinc-400">Loading Library...</h1>
+        <div className="flex items-center justify-center h-screen" style={{ backgroundColor: 'var(--bg-primary)'}}>
+            <h1 className="text-2xl font-medium" style={{ color: 'var(--text-secondary)'}}>Loading Library...</h1>
         </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-zinc-900 text-zinc-100 font-sans">
+    <div className="min-h-screen">
       {selectedBook ? (
         <Reader book={selectedBook} onBackToLibrary={handleBackToLibrary} />
       ) : (

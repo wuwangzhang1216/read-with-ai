@@ -1,99 +1,184 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { Book } from '../types';
 import Spinner from './ui/Spinner';
+import { ChatIcon } from './icons/Icons';
 
-declare const PDFObject: any;
+declare const pdfjsLib: any;
+declare const pdfjsViewer: any;
 
 interface BookViewerProps {
   book: Book;
   currentPage: number;
+  onAskAboutSelection: (selectedText: string) => void;
 }
 
-// Helper function to convert ArrayBuffer to a Base64 string for the data URL
-function arrayBufferToDataURL(buffer: ArrayBuffer): string {
-  let binary = '';
-  const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  const base64 = window.btoa(binary);
-  return `data:application/pdf;base64,${base64}`;
+interface SelectionPopupState {
+  visible: boolean;
+  top: number;
+  left: number;
+  text: string;
 }
 
-
-const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage }) => {
-  const embedTargetRef = useRef<HTMLDivElement>(null);
+const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSelection }) => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textLayerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  
+  const [pdfDoc, setPdfDoc] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  // Memoize the data URL conversion to avoid re-computing on every render
-  const pdfDataUrl = useMemo(() => {
-    if (!book.fileBuffer || book.fileBuffer.byteLength === 0) {
-        setError("Book file is empty or invalid.");
-        return null;
-    }
-    try {
-        return arrayBufferToDataURL(book.fileBuffer);
-    } catch (e) {
-        console.error("Failed to convert ArrayBuffer to Data URL:", e);
-        setError("Could not process the book file.");
-        return null;
-    }
-  }, [book.fileBuffer]);
+  const [selectionPopup, setSelectionPopup] = useState<SelectionPopupState>({ visible: false, top: 0, left: 0, text: '' });
   
+  const bookId = book.id;
   useEffect(() => {
-    if (!embedTargetRef.current) return;
-    
-    // Clear previous content
-    embedTargetRef.current.innerHTML = '';
     setIsLoading(true);
     setError(null);
+    const loadingTask = pdfjsLib.getDocument({ data: book.fileBuffer.slice(0) });
+    loadingTask.promise.then((doc: any) => {
+      setPdfDoc(doc);
+    }).catch((err: Error) => {
+      console.error("Failed to load PDF document:", err);
+      setError("Could not load the book file.");
+    });
+  }, [bookId, book.fileBuffer]);
 
-    if (pdfDataUrl) {
-      const urlWithOptions = `${pdfDataUrl}#page=${currentPage}`;
-      
-      const options = {
-        pdfOpenParams: {
-          view: 'FitV', // Fit the page vertically
-        },
-        // Styling the embed to ensure it fills the container
-        attributes: {
-            style: 'width: 100%; height: 100%; border: none;'
-        }
-      };
+  useEffect(() => {
+    if (!pdfDoc) return;
 
-      const success = PDFObject.embed(urlWithOptions, embedTargetRef.current, options);
-      if (!success) {
-        setError("Failed to embed PDF. The browser may not support it or the file is corrupted.");
+    let isCancelled = false;
+    const renderPage = async () => {
+      setIsLoading(true);
+      if (selectionPopup.visible) {
+        setSelectionPopup({ ...selectionPopup, visible: false });
+      }
+
+      try {
+        const page = await pdfDoc.getPage(currentPage);
+        if (isCancelled) return;
+        
+        const canvas = canvasRef.current;
+        const textLayer = textLayerRef.current;
+        const container = containerRef.current;
+        if (!canvas || !textLayer || !container) return;
+        
+        const viewport = page.getViewport({ scale: 2 });
+        const outputScale = window.devicePixelRatio || 1;
+        
+        const context = canvas.getContext('2d');
+        if (!context) return;
+
+        canvas.width = Math.floor(viewport.width * outputScale);
+        canvas.height = Math.floor(viewport.height * outputScale);
+        canvas.style.width = `${Math.floor(viewport.width)}px`;
+        canvas.style.height = `${Math.floor(viewport.height)}px`;
+
+        const transform = outputScale !== 1 ? [outputScale, 0, 0, outputScale, 0, 0] : undefined;
+
+        await page.render({ canvasContext: context, transform, viewport }).promise;
+        if (isCancelled) return;
+
+        textLayer.innerHTML = '';
+        textLayer.style.width = canvas.style.width;
+        textLayer.style.height = canvas.style.height;
+        
+        const textContent = await page.getTextContent();
+        if (isCancelled) return;
+
+        const textLayerRenderer = new pdfjsViewer.TextLayerBuilder({
+            textLayerDiv: textLayer,
+            pageIndex: page.pageIndex,
+            viewport: viewport,
+        });
+        textLayerRenderer.setTextContent(textContent);
+        textLayerRenderer.render();
+        
+      } catch (err) {
+        console.error(`Failed to render page ${currentPage}:`, err);
+        setError("Could not display this page.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    renderPage();
+    
+    return () => {
+      isCancelled = true;
+    };
+  }, [pdfDoc, currentPage, selectionPopup.visible]);
+  
+  const handleMouseUp = () => {
+    const selection = window.getSelection();
+    const selectedText = selection?.toString().trim() ?? '';
+    
+    if (selectedText && containerRef.current) {
+      const range = selection!.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const containerRect = containerRef.current.getBoundingClientRect();
+
+      setSelectionPopup({
+        visible: true,
+        top: rect.top - containerRect.top + rect.height,
+        left: rect.left - containerRect.top + rect.width / 2,
+        text: selectedText
+      });
+    } else {
+      if (selectionPopup.visible) {
+         setSelectionPopup({ ...selectionPopup, visible: false });
       }
     }
-
-    // A small timeout to let the PDF viewer render before hiding the spinner
-    const timer = setTimeout(() => setIsLoading(false), 500);
-    return () => clearTimeout(timer);
-
-  }, [pdfDataUrl, currentPage]);
+  };
 
   return (
-    <div className="flex justify-center items-center h-full w-full bg-zinc-800 p-2 sm:p-4">
+    <div className="flex justify-center items-start h-full w-full p-2 sm:p-8 overflow-auto custom-scrollbar" onMouseUp={handleMouseUp} style={{ backgroundColor: 'var(--bg-secondary)'}}>
       {error && (
-        <div className="text-red-400 p-4 text-center">
+        <div className="p-4 text-center m-auto" style={{ color: 'var(--accent-red)'}}>
             <p className="font-semibold">Error</p>
             <p>{error}</p>
         </div>
       )}
       <div 
-        ref={embedTargetRef} 
-        className="h-full w-full shadow-2xl" 
-        style={{ display: error ? 'none' : 'block' }}
-      />
-      {isLoading && !error && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-400 bg-zinc-800">
+        ref={containerRef}
+        className="relative rounded-md" 
+        style={{ 
+            display: error ? 'none' : 'block',
+            backgroundColor: 'var(--bg-primary)',
+            boxShadow: 'var(--card-shadow)'
+        }}
+      >
+        <canvas ref={canvasRef} className="rounded-md" />
+        <div ref={textLayerRef} className="textLayer" />
+         {selectionPopup.visible && (
+          <button
+            onClick={() => onAskAboutSelection(selectionPopup.text)}
+            className="absolute z-10 flex items-center gap-2 px-3 py-1.5 text-white font-semibold rounded-md shadow-lg text-sm transition-all"
+            style={{ 
+              top: `${selectionPopup.top + 8}px`, 
+              left: `${selectionPopup.left}px`, 
+              transform: 'translateX(-50%)',
+              backgroundColor: 'var(--accent-red)'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-red-hover)'}
+            onMouseOut={(e) => e.currentTarget.style.backgroundColor = 'var(--accent-red)'}
+          >
+            <ChatIcon className="w-4 h-4" />
+            Ask about this
+          </button>
+        )}
+      </div>
+      {(isLoading || !pdfDoc) && !error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-200/20 z-20">
           <Spinner className="w-10 h-10 mb-4" />
-          <p>Loading PDF Viewer...</p>
+          <p style={{ color: 'var(--text-secondary)'}}>{!pdfDoc ? "Loading Book..." : `Rendering Page ${currentPage}...`}</p>
         </div>
       )}
+       <style>{`
+          .textLayer ::selection { background: rgba(192, 57, 43, 0.3); }
+          .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+          .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+          .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--hover-color); border-radius: 4px; }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+      `}</style>
     </div>
   );
 };

@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
+    <meta charset="UTF-g" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Reading Agent</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdfobject/2.3.0/pdfobject.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf_viewer.css" />
     <script>
       // Set worker source for pdf.js
       if (typeof pdfjsLib !== 'undefined') {
@@ -15,6 +15,41 @@
       }
     </script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+      /* 墨韵书香 配色方案 */
+      :root {
+        --font-serif: "Georgia", "Times New Roman", serif;
+        --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+        --bg-primary: #faf8f3;      /* Parchment Paper */
+        --bg-secondary: #f0ede6;   /* Slightly darker paper/desk */
+        --text-primary: #2c3e50;    /* Dark Ink */
+        --text-secondary: #34495e;  /* Lighter Ink */
+        --text-light: #faf8f3;       /* Text on dark backgrounds */
+        --border-color: #e8e4db;    /* Subtle Border */
+        --hover-color: #ddd7ca;     /* Gentle Hover */
+        
+        /* Chat Panel (Ink Stone) */
+        --sidebar-bg: #34495e;
+        --sidebar-bg-lighter: #4a627a;
+
+        /* Accent (Seal Stamp) */
+        --accent-red: #c0392b;
+        --accent-red-hover: #a93226;
+
+        /* Component specific */
+        --card-shadow: 0 4px 15px rgba(0, 0, 0, 0.06);
+        --card-hover-shadow: 0 6px 20px rgba(0, 0, 0, 0.1);
+      }
+      body {
+        font-family: var(--font-sans);
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+      }
+      h1, h2, h3, h4, h5, h6 {
+        font-family: var(--font-serif);
+      }
+    </style>
   <script type="importmap">
 {
   "imports": {
@@ -26,8 +61,8 @@
 }
 </script>
 </head>
-  <body class="bg-zinc-900 text-white antialiased">
+  <body class="antialiased">
     <div id="root"></div>
-    <script type="module" src="./index.tsx"></script>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>
