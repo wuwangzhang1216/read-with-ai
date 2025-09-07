@@ -115,7 +115,7 @@ const BookViewer: React.FC<BookViewerProps> = ({ book, currentPage, onAskAboutSe
           viewport: viewport,
         });
 
-        textLayer.setTextContent(textContent);
+        textLayer.setTextContentSource(textContent);
         textLayer.render();
       } catch (err: any) {
         if (err.name !== 'RenderingCancelledException' && err.message !== 'cancelled') {
