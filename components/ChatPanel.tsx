@@ -3,6 +3,8 @@ import { ChatMessage } from '../types';
 import { CloseIcon, SendIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
 
+declare const marked: any;
+
 interface ChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
@@ -52,22 +54,34 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     }
   };
   
-  const parseContent = (content: string) => {
+  const renderAiContent = (content: string) => {
+    const markedOptions = {
+        gfm: true,
+        breaks: true,
+    };
+
     const parts = content.split(/(\[Source:[^\]]+\])/g);
+    
     return parts.map((part, index) => {
       if (!part) return null;
+      
       const match = part.match(/\[Source:\s*([^\]]+)\]/);
       if (match) {
         const pages = match[1].split(',').map(p => p.trim().replace(/^p/i, '')).map(Number).filter(n => !isNaN(n) && n > 0);
-        if (pages.length === 0) return <span key={index}>{part}</span>;
+        
+        if (pages.length === 0) {
+            const html = marked.parse(part, markedOptions);
+            return <div key={index} dangerouslySetInnerHTML={{ __html: html }} />;
+        }
         
         return (
-          <div key={index} className="text-sm mt-2" style={{color: 'var(--text-tertiary)'}}>
+          <div key={index} className="text-sm mt-2" style={{color: 'var(--text-secondary)'}}>
             Source: {pages.map((page, i) => (
               <React.Fragment key={page}>
                 <button
                   onClick={() => onNavigateToPage(page)}
-                  className="underline hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-400 rounded"
+                  className="underline hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-400 rounded"
+                  style={{ color: '#3b82f6'}}
                 >
                   p{page}
                 </button>
@@ -77,12 +91,62 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           </div>
         );
       }
-      return <span key={index}>{part}</span>;
+      
+      const html = marked.parse(part, markedOptions);
+      return <div key={index} dangerouslySetInnerHTML={{ __html: html }} />;
     });
   };
 
   return (
     <>
+      <style>{`
+        .prose-light {
+          color: var(--text-primary);
+          line-height: 1.6;
+        }
+        .prose-light > div > *:first-child {
+          margin-top: 0;
+        }
+        .prose-light > div > *:last-child {
+          margin-bottom: 0;
+        }
+        .prose-light p, .prose-light ul, .prose-light ol, .prose-light blockquote, .prose-light pre {
+            margin-top: 0.8em;
+            margin-bottom: 0.8em;
+        }
+        .prose-light ul, .prose-light ol {
+            list-style-position: outside;
+            padding-left: 1.2em;
+        }
+        .prose-light ul { list-style-type: disc; }
+        .prose-light ol { list-style-type: decimal; }
+        .prose-light li { margin-bottom: 0.25em; }
+        .prose-light a { color: #3b82f6; text-decoration: underline; }
+        .prose-light blockquote {
+            border-left: 3px solid var(--border-color);
+            padding-left: 1em;
+            font-style: italic;
+            color: var(--text-secondary);
+        }
+        .prose-light pre {
+            background-color: var(--sidebar-bg);
+            color: var(--text-light);
+            padding: 1em;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: monospace;
+        }
+        .prose-light :not(pre) > code {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.2em 0.4em;
+            margin: 0 0.1em;
+            font-size: 85%;
+            border-radius: 6px;
+            font-family: monospace;
+        }
+      `}</style>
       <div 
         className={`fixed inset-0 bg-black/30 z-40 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
@@ -90,7 +154,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       ></div>
       <div
         className={`fixed top-0 right-0 h-full w-full max-w-lg shadow-2xl z-50 flex flex-col transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
-        style={{ backgroundColor: 'var(--bg-primary)'}}
+        style={{ backgroundColor: 'var(--bg-primary)', willChange: 'transform, opacity', transition: 'transform 0.3s ease-out, opacity 0.3s ease-out' }}
       >
         <header className="flex items-center justify-between p-4 border-b flex-shrink-0" style={{ borderColor: 'var(--border-color)'}}>
           <h2 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>AI Assistant</h2>
@@ -106,7 +170,10 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
                 className={`max-w-md px-4 py-3 rounded-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : ''}`}
                 style={msg.role === 'assistant' ? {backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)'} : {}}
               >
-                <div className="whitespace-pre-wrap">{parseContent(msg.content)}</div>
+                {msg.role === 'user' 
+                 ? <div className="whitespace-pre-wrap">{msg.content}</div>
+                 : <div className="prose-light max-w-none">{renderAiContent(msg.content)}</div>
+                }
               </div>
             </div>
           ))}
