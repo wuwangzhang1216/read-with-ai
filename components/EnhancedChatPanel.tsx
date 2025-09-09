@@ -163,6 +163,11 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
     setAutoStickToBottom(atBottom);
   };
 
+  // Handle user interaction that should disable auto-stick-to-bottom
+  const handleUserInteraction = () => {
+    setAutoStickToBottom(false);
+  };
+
   useEffect(() => {
     if (!isOpen) return;
     if (autoStickToBottom) {
@@ -201,6 +206,13 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           color: var(--text-primary);
           line-height: 1.7;
           font-size: 14px;
+        }
+        /* Ensure AI response text is selectable */
+        .prose-light, .prose-light * {
+          -webkit-user-select: text;
+          -moz-user-select: text;
+          -ms-user-select: text;
+          user-select: text;
         }
         .prose-light > * > *:first-child { margin-top: 0; }
         .prose-light > * > *:last-child { margin-bottom: 0; }
@@ -252,10 +264,11 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
         /* Enhanced message bubble styling */
         .message-bubble {
           position: relative;
-          transition: all 0.2s ease-out;
+          transition: box-shadow 0.2s ease-out;
         }
 
-        .message-bubble:hover {
+        /* Only nudge user bubbles on hover; keep assistant stable for reliable selection */
+        .message-bubble.user:hover {
           transform: translateY(-1px);
         }
 
@@ -271,6 +284,22 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           color: var(--text-primary);
           border: 1px solid var(--border-color);
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+        /* Explicitly allow text selection inside assistant bubbles */
+        .message-bubble.assistant, 
+        .message-bubble.assistant *,
+        .message-bubble.assistant *::before,
+        .message-bubble.assistant *::after,
+        .enhanced-chat-panel .prose-light,
+        .enhanced-chat-panel .prose-light *,
+        .enhanced-chat-panel .markdown-message,
+        .enhanced-chat-panel .markdown-message * {
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
+          user-select: text !important;
+          pointer-events: auto !important;
+          -webkit-touch-callout: default !important;
         }
 
         /* Animation for thinking indicator */
@@ -451,7 +480,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
         .message-bubble.user .edit-hint { color: rgba(255,255,255,0.75) !important; }
       `}</style>
 
-      <div className="h-full w-full flex flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
+      <div className="enhanced-chat-panel h-full w-full flex flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
         <header className="flex items-center justify-between p-5 border-b flex-shrink-0"
                 style={{ borderColor: 'var(--border-color)', background: 'linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%)' }}>
           <div className="flex items-center gap-4">
@@ -517,7 +546,12 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           </button>
         </div>
 
-        <div ref={chatContainerRef} onScroll={handleScrollContainer} className="flex-grow p-6 overflow-y-auto space-y-6">
+        <div
+          ref={chatContainerRef}
+          onScroll={handleScrollContainer}
+          onWheel={handleUserInteraction}
+          className="flex-grow p-6 overflow-y-auto space-y-6"
+        >
           {chatHistory.map((msg, index) => (
             <AnimatedMessage key={index} delay={index * 150} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'user' && index === chatHistory.length - 1 && messageReceived ? 'message-received' : ''}`}>
               <div className={`w-full px-5 py-4 rounded-2xl message-bubble ${msg.role === 'user' ? 'user' : 'assistant'}`}>

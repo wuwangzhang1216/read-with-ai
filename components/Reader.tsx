@@ -235,6 +235,13 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         return;
       }
 
+      // Check if selection is within chat panel - if so, ignore it completely
+      const chatPanel = contextEl.closest?.('.enhanced-chat-panel, .chat-panel, [role="dialog"]');
+      if (chatPanel) {
+        // Don't interfere with chat panel text selection
+        return;
+      }
+
       // Limit to PDF.js text layer to avoid interfering with other UI
       const textLayer = contextEl.closest?.('.textLayer');
       if (!textLayer) {
@@ -265,6 +272,20 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     };
 
     const handleSelectionChange = () => {
+      // Check if selection is within chat panel first - if so, completely ignore
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        const contextEl = nearestElement(range.commonAncestorContainer);
+        if (contextEl) {
+          const chatPanel = contextEl.closest?.('.enhanced-chat-panel, .chat-panel, [role="dialog"]');
+          if (chatPanel) {
+            // Don't process selection changes in chat panel at all
+            return;
+          }
+        }
+      }
+      
       // Minor debounce to avoid jitter while dragging
       setTimeout(showPopupFromSelection, 10);
     };
@@ -277,6 +298,12 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       // Don't hide if clicking inside the popup
       const pop = popupRef.current;
       if (pop && pop.contains(e.target as Node)) return;
+      
+      // Don't interfere if clicking inside chat panel
+      const target = e.target as Element;
+      const chatPanel = target.closest?.('.enhanced-chat-panel, .chat-panel, [role="dialog"]');
+      if (chatPanel) return;
+      
       setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
     };
 

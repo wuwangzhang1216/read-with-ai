@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -13,31 +13,125 @@ const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
   content,
   className = '',
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  
   const cleanContent = content
     .replace(/\[Source:[^\]]+\]/gi, '')
     .replace(/\[p\.\s*\d+\]/gi, '')
     .replace(/\[pp\.\s*\d+-\d+\]/gi, '')
     .trim();
 
+  useEffect(() => {
+    // Force enable text selection after component mounts
+    const container = containerRef.current;
+    if (container) {
+      // Remove any conflicting styles
+      container.style.userSelect = 'text';
+      container.style.webkitUserSelect = 'text';
+      
+      // Apply to all children
+      const allElements = container.querySelectorAll('*');
+      allElements.forEach((el: Element) => {
+        const htmlEl = el as HTMLElement;
+        htmlEl.style.userSelect = 'text';
+        htmlEl.style.webkitUserSelect = 'text';
+      });
+    }
+
+    // Debug selection changes specifically for this component
+    let lastSelectionText = '';
+    const debugSelectionChange = () => {
+      const sel = window.getSelection();
+      if (sel && container && container.contains(sel.anchorNode)) {
+        const currentText = sel.toString();
+        if (currentText !== lastSelectionText) {
+          lastSelectionText = currentText;
+        }
+      }
+    };
+
+    document.addEventListener('selectionchange', debugSelectionChange);
+    
+    return () => {
+      document.removeEventListener('selectionchange', debugSelectionChange);
+    };
+  }, [content]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    // Don't prevent default behavior for text selection
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    // Check selection after mouse up
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) {
+        // Selection exists, handle as needed
+      }
+    }, 50);
+  };
+
   return (
-    <div className={`markdown-message max-w-none ${className}`} role="article" aria-label="AI response message">
-      <ReactMarkdown
+    <>
+      <style>{`
+        .markdown-message.max-w-none,
+        .markdown-message.max-w-none *,
+        .markdown-message.max-w-none *::before,
+        .markdown-message.max-w-none *::after {
+          -webkit-user-select: text !important;
+          -moz-user-select: text !important;
+          -ms-user-select: text !important;
+          user-select: text !important;
+          pointer-events: auto !important;
+          /* Disable any animations or transitions that might interfere */
+          animation: none !important;
+          transition: none !important;
+          transform: none !important;
+        }
+        .markdown-message.max-w-none * {
+          -webkit-touch-callout: default !important;
+          /* Ensure no CSS can interfere with selection */
+          will-change: auto !important;
+        }
+        /* Prevent any global selection modifications */
+        .markdown-message.max-w-none::selection,
+        .markdown-message.max-w-none *::selection {
+          background: #3390ff !important;
+          color: white !important;
+        }
+      `}</style>
+      <div
+        ref={containerRef}
+        className={`markdown-message max-w-none ${className}`}
+        role="article"
+        aria-label="AI response message"
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        style={{
+          userSelect: 'text' as const,
+          WebkitUserSelect: 'text' as const,
+          MozUserSelect: 'text' as const,
+          msUserSelect: 'text' as const
+        }}
+      >
+        <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          code({ node, inline, className, children, ...props }) {
+          code(props) {
+            const { node, className, children, ref, ...restProps } = props;
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : 'text';
             const codeContent = String(children).replace(/\n$/, '');
-            
+
             // Heuristic to fix parser incorrectly identifying inline code as a block,
             // which often happens with indented code in list items.
-            const isLikelyInline = inline || !codeContent.includes('\n');
+            const isLikelyInline = (props as any).inline || !codeContent.includes('\n');
 
             if (isLikelyInline) {
               return (
-                <code 
-                  className="bg-[rgba(44,62,80,0.08)] px-1.5 py-1 rounded-md text-sm font-mono text-[var(--text-primary)] border border-transparent mx-0.5" 
-                  {...props}
+                <code
+                  className="bg-[rgba(44,62,80,0.08)] px-1.5 py-1 rounded-md text-sm font-mono text-[var(--text-primary)] border border-transparent mx-0.5"
+                  {...restProps}
                 >
                   {codeContent}
                 </code>
@@ -51,17 +145,10 @@ const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
                 </div>
                 <SyntaxHighlighter
                   language={language}
-                  style={oneDark}
-                  customStyle={{
-                    margin: 0,
-                    fontSize: '13px',
-                    lineHeight: '1.5',
-                    padding: '1em',
-                    backgroundColor: '#2d2d2d'
-                  }}
+                  style={oneDark as any}
                   showLineNumbers={codeContent.split('\n').length > 5}
                   wrapLines={true}
-                  {...props}
+                  {...restProps}
                 >
                   {codeContent}
                 </SyntaxHighlighter>
@@ -79,10 +166,11 @@ const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
           hr: ({node, ...props}) => <hr className="my-6 border-gray-200" {...props} />,
           a: ({node, ...props}) => <a className="text-blue-600 hover:text-blue-800 underline" target="_blank" rel="noopener noreferrer" {...props} />,
         }}
-      >
-        {cleanContent}
-      </ReactMarkdown>
-    </div>
+        >
+          {cleanContent}
+        </ReactMarkdown>
+      </div>
+    </>
   );
 };
 
