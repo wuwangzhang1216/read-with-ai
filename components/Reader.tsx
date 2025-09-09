@@ -196,42 +196,77 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       return false;
     };
 
-    const handleMouseUp = () => {
+    const computeSelectionRect = (sel: Selection) => {
+      try {
+        if (sel.rangeCount === 0) return null;
+        const range = sel.getRangeAt(0);
+        const rects = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0);
+        const rect = rects.length > 0 ? rects[0] : range.getBoundingClientRect();
+        return rect;
+      } catch {
+        return null;
+      }
+    };
+
+    const nearestElement = (n: Node | null): HTMLElement | null => {
+      if (!n) return null;
+      if (n.nodeType === Node.ELEMENT_NODE) return n as HTMLElement;
+      const anyN = n as any;
+      if (anyN.parentElement) return anyN.parentElement as HTMLElement;
+      if (anyN.parentNode && anyN.parentNode.nodeType === Node.ELEMENT_NODE) return anyN.parentNode as HTMLElement;
+      return null;
+    };
+
+    const showPopupFromSelection = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        return;
+      }
+
+      // Find a robust element context for the selection
+      const range = sel.getRangeAt(0);
+      const anchorEl = nearestElement(sel.anchorNode);
+      const focusEl = nearestElement(sel.focusNode);
+      const commonEl = nearestElement(range.commonAncestorContainer);
+      const contextEl = anchorEl || focusEl || commonEl;
+      if (!contextEl || !isNodeInside(contextEl, root)) {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        return;
+      }
+
+      // Limit to PDF.js text layer to avoid interfering with other UI
+      const textLayer = contextEl.closest?.('.textLayer');
+      if (!textLayer) {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        return;
+      }
+
+      const txt = normalizeSelectedText(sel.toString());
+      if (!txt) {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        return;
+      }
+
+      const rect = computeSelectionRect(sel);
+      if (!rect) {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        return;
+      }
+      selectedTextRef.current = txt;
+      const x = rect.left + rect.width / 2; // viewport coords
+      const y = rect.top; // viewport coords
+      setSelectionPopup({ visible: true, x, y, text: txt });
+    };
+
+    const handlePointerUp = () => {
       // Delay a tick to allow selection to finalize
-      setTimeout(() => {
-        try {
-          const sel = window.getSelection();
-          if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
-            return;
-          }
-          const anchorNode = sel.anchorNode;
-          if (!anchorNode || !isNodeInside(anchorNode, root)) {
-            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
-            return;
-          }
-          // Limit to textLayer selection for best accuracy
-          const textLayer = (anchorNode as HTMLElement).closest?.('.textLayer');
-          if (!textLayer) {
-            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
-            return;
-          }
-          const text = normalizeSelectedText(sel.toString());
-          if (!text || !text.trim()) {
-            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
-            return;
-          }
-          selectedTextRef.current = text;
-          const range = sel.getRangeAt(0);
-          const rect = range.getBoundingClientRect();
-          // Position in viewport coordinates; popup uses fixed positioning
-          const x = rect.left + rect.width / 2;
-          const y = rect.top;
-          setSelectionPopup({ visible: true, x, y, text });
-        } catch {
-          setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
-        }
-      }, 0);
+      setTimeout(showPopupFromSelection, 0);
+    };
+
+    const handleSelectionChange = () => {
+      // Minor debounce to avoid jitter while dragging
+      setTimeout(showPopupFromSelection, 10);
     };
 
     const handleScroll = () => {
@@ -252,13 +287,15 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     };
 
     // Attach listeners
-    root.addEventListener('mouseup', handleMouseUp);
+    root.addEventListener('pointerup', handlePointerUp);
+    document.addEventListener('selectionchange', handleSelectionChange);
     scrollEl?.addEventListener('scroll', handleScroll, { passive: true });
     window.addEventListener('mousedown', handleGlobalMouseDown);
     window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      root.removeEventListener('mouseup', handleMouseUp);
+      root.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('selectionchange', handleSelectionChange as any);
       scrollEl?.removeEventListener('scroll', handleScroll as any);
       window.removeEventListener('mousedown', handleGlobalMouseDown as any);
       window.removeEventListener('keydown', handleKeyDown as any);

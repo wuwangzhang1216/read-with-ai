@@ -33,7 +33,7 @@ const SelectionPopup: React.FC<SelectionPopupProps> = ({ x, y, onAction }) => {
         left: `${x}px`,
         top: `${y}px`,
         transform: 'translate(-50%, -120%)',
-        zIndex: 50,
+        zIndex: 80,
         willChange: 'transform, opacity',
         backgroundColor: 'var(--sidebar-bg)',
       }}
