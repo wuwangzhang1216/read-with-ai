@@ -3,8 +3,8 @@ import { createPortal } from 'react-dom';
 import { ChatMessage } from '../types';
 import { CloseIcon, SendIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
-
-declare const marked: any;
+import MarkdownMessage from './MarkdownMessage';
+import AnimatedMessage from './AnimatedMessage';
 
 interface ChatPanelProps {
   isOpen: boolean;
@@ -50,53 +50,12 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
       handleSendMessage();
     }
   };
   
-  const renderAiContent = (content: string) => {
-    const markedOptions = {
-        gfm: true,
-        breaks: true,
-    };
-
-    const parts = content.split(/(\[Source:[^\]]+\])/g);
-    
-    return parts.map((part, index) => {
-      if (!part) return null;
-      
-      const match = part.match(/\[Source:\s*([^\]]+)\]/);
-      if (match) {
-        const pages = match[1].split(',').map(p => p.trim().replace(/^p/i, '')).map(Number).filter(n => !isNaN(n) && n > 0);
-        
-        if (pages.length === 0) {
-            const html = marked.parse(part, markedOptions);
-            return <div key={index} dangerouslySetInnerHTML={{ __html: html }} />;
-        }
-        
-        return (
-          <div key={index} className="text-sm mt-2" style={{color: 'var(--text-secondary)'}}>
-            Source: {pages.map((page, i) => (
-              <React.Fragment key={page}>
-                <button
-                  onClick={() => onNavigateToPage(page)}
-                  className="underline hover:opacity-80 focus:outline-none focus:ring-2 focus:ring-blue-400 rounded"
-                  style={{ color: '#3b82f6'}}
-                >
-                  p{page}
-                </button>
-                {i < pages.length - 1 ? ', ' : ''}
-              </React.Fragment>
-            ))}
-          </div>
-        );
-      }
-      
-      const html = marked.parse(part, markedOptions);
-      return <div key={index} dangerouslySetInnerHTML={{ __html: html }} />;
-    });
-  };
 
   if (!isOpen) {
     return null;
@@ -165,24 +124,24 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
         
         <div ref={chatContainerRef} className="flex-grow p-4 overflow-y-auto space-y-6">
           {chatHistory.map((msg, index) => (
-            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div 
+            <AnimatedMessage key={index} delay={index * 100} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div
                 className={`max-w-md px-4 py-3 rounded-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : ''}`}
                 style={msg.role === 'assistant' ? {backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)'} : {}}
               >
-                {msg.role === 'user' 
+                {msg.role === 'user'
                  ? <div className="whitespace-pre-wrap">{msg.content}</div>
-                 : <div className="prose-light max-w-none">{renderAiContent(msg.content)}</div>
+                 : <MarkdownMessage content={msg.content} className="prose-light max-w-none" />
                 }
               </div>
-            </div>
+            </AnimatedMessage>
           ))}
           {isAiThinking && (
-            <div className="flex justify-start">
+            <AnimatedMessage delay={chatHistory.length * 100} className="flex justify-start">
               <div className="max-w-md px-4 py-3 rounded-lg inline-flex" style={{backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)'}}>
                 <Spinner className="w-5 h-5" />
               </div>
-            </div>
+            </AnimatedMessage>
           )}
         </div>
         
@@ -213,7 +172,214 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     </>
   );
 
-  return content;
+  return (
+    <>
+      <style>{`
+        .prose-light {
+          color: var(--text-primary);
+          line-height: 1.7;
+          font-size: 14px;
+        }
+        .prose-light > div > *:first-child {
+          margin-top: 0;
+        }
+        .prose-light > div > *:last-child {
+          margin-bottom: 0;
+        }
+        .prose-light p, .prose-light ul, .prose-light ol, .prose-light blockquote, .prose-light pre {
+            margin-top: 1em;
+            margin-bottom: 1em;
+        }
+        .prose-light ul, .prose-light ol {
+            list-style-position: outside;
+            padding-left: 1.4em;
+        }
+        .prose-light ul { list-style-type: disc; }
+        .prose-light ol { list-style-type: decimal; }
+        .prose-light li { margin-bottom: 0.3em; }
+        .prose-light a { color: #3b82f6; text-decoration: underline; }
+        .prose-light blockquote {
+            border-left: 4px solid var(--border-color);
+            padding-left: 1.2em;
+            font-style: italic;
+            color: var(--text-secondary);
+            background-color: rgba(232, 228, 219, 0.3);
+            padding: 1em 1.2em;
+            border-radius: 0 8px 8px 0;
+            margin: 1.2em 0;
+        }
+        .prose-light pre {
+            background: linear-gradient(135deg, var(--sidebar-bg) 0%, var(--sidebar-bg-lighter) 100%);
+            color: var(--text-light);
+            padding: 1.2em;
+            border-radius: 12px;
+            overflow-x: auto;
+            font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.5;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .prose-light :not(pre) > code {
+            background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(232, 228, 219, 0.8) 100%);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.25em 0.5em;
+            margin: 0 0.1em;
+            font-size: 13px;
+            border-radius: 6px;
+            font-family: 'SF Mono', 'Monaco', 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+            font-weight: 500;
+        }
+
+        /* Enhanced message bubble styling */
+        .message-bubble {
+          position: relative;
+          transition: all 0.2s ease-out;
+        }
+
+        .message-bubble:hover {
+          transform: translateY(-1px);
+        }
+
+        .message-bubble.user {
+          background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+          color: white;
+          box-shadow: 0 4px 12px rgba(44, 62, 80, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .message-bubble.assistant {
+          background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(240, 237, 230, 0.95) 100%);
+          color: var(--text-primary);
+          border: 1px solid var(--border-color);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        /* Enhanced animations */
+        .message-enter {
+          animation: slideInFade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes slideInFade {
+          from {
+            opacity: 0;
+            transform: translateY(12px) scale(0.95);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+
+        /* Send button with enhanced styling */
+        .send-button {
+          background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+          transition: all 0.2s ease-out;
+          box-shadow: 0 2px 8px rgba(44, 62, 80, 0.3);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .send-button:hover:not(:disabled) {
+          transform: translateY(-1px) scale(1.05);
+          box-shadow: 0 4px 12px rgba(44, 62, 80, 0.4);
+        }
+
+        .send-button:active:not(:disabled) {
+          transform: translateY(0) scale(0.98);
+        }
+
+        .send-button:disabled {
+          background: var(--hover-color);
+          box-shadow: none;
+          border: 1px solid var(--border-color);
+        }
+
+        /* Enhanced input styling */
+        .chat-input {
+          background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(240, 237, 230, 0.95) 100%);
+          border: 2px solid var(--border-color);
+          transition: all 0.2s ease-out;
+          font-size: 14px;
+          font-weight: 400;
+        }
+
+        .chat-input:focus {
+          border-color: #2c3e50;
+          box-shadow: 0 0 0 3px rgba(44, 62, 80, 0.1);
+          background: linear-gradient(135deg, #ffffff 0%, var(--bg-secondary) 100%);
+        }
+
+        .chat-input::placeholder {
+          color: var(--text-secondary);
+          opacity: 0.7;
+        }
+
+        /* Header enhancement */
+        .header-icon {
+          background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(59, 130, 246, 0.05) 100%);
+          border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+      `}</style>
+      <div
+        className="h-full w-full flex flex-col"
+        style={{ backgroundColor: 'var(--bg-primary)'}}
+      >
+        <header className="flex items-center justify-between p-5 border-b flex-shrink-0" style={{ borderColor: 'var(--border-color)'}}>
+          <h2 className="text-2xl font-bold tracking-tight" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-serif)' }}>AI Assistant</h2>
+          <button onClick={onClose} className="p-2.5 rounded-lg hover:bg-black/5 transition-all duration-200 hover:scale-105" aria-label="Close chat" style={{ color: 'var(--text-secondary)'}}>
+            <CloseIcon className="w-5 h-5" />
+          </button>
+        </header>
+
+        <div ref={chatContainerRef} className="flex-grow p-6 overflow-y-auto space-y-6">
+          {chatHistory.map((msg, index) => (
+            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} message-enter`}>
+              <div
+                className={`w-full px-5 py-4 rounded-2xl message-bubble ${msg.role === 'user' ? 'user' : 'assistant'}`}
+              >
+                {msg.role === 'user'
+                 ? <div className="whitespace-pre-wrap text-[15px] leading-relaxed font-medium">{msg.content}</div>
+                 : <div className="prose-light max-w-none">{renderAiContent(msg.content)}</div>
+                }
+              </div>
+            </div>
+          ))}
+          {isAiThinking && (
+            <div className="flex justify-start message-enter">
+              <div className="w-full px-5 py-4 rounded-2xl message-bubble assistant inline-flex" style={{backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)'}}>
+                <Spinner className="w-5 h-5" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="p-5 border-t flex-shrink-0" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)'}}>
+          <div className="flex items-end space-x-3">
+            <div className="flex-grow">
+              <input
+                ref={inputRef}
+                type="text"
+                value={inputValue}
+                onChange={(e) => onInputChange(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask a question about the book..."
+                disabled={isAiThinking}
+                className="chat-input w-full px-5 py-3.5 border-2 rounded-2xl focus:outline-none transition-all duration-200 text-[14px]"
+              />
+            </div>
+            <button
+              onClick={handleSendMessage}
+              disabled={!inputValue.trim() || isAiThinking}
+              className="send-button p-3.5 text-white rounded-2xl disabled:cursor-not-allowed flex-shrink-0"
+              aria-label="Send message"
+            >
+              <SendIcon className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
 };
 
 export default ChatPanel;

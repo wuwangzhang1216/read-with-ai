@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Book, Chunk } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
-import * as geminiService from '../services/geminiService';
+import * as enhancedRagService from '../services/enhancedRagService';
 
 declare const pdfjsLib: any;
 
@@ -60,7 +60,7 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
 
       setProcessingStatus('Generating embeddings...');
       const chunkContents = chunks.map(c => c.content);
-      const embeddings = await geminiService.generateEmbeddingsBatch(chunkContents);
+      const embeddings = await enhancedRagService.generateEmbeddingsBatch(chunkContents);
 
       const bookId = `book-${Date.now()}`;
 

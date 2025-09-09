@@ -10,9 +10,18 @@
   },
   "dependencies": {
     "@google/genai": "^1.17.0",
+    "@langchain/community": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/google-genai": "^0.1.0",
     "@pdftron/webviewer": "^11.7.1",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "langchain": "^0.3.0",
+    "prismjs": "^1.30.0",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^15.6.6",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

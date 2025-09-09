@@ -1,0 +1,422 @@
+import { ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
+import { VectorStore } from "@langchain/core/vectorstores";
+import { Document } from "@langchain/core/documents";
+import { BaseMessage, HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
+import { RunnableSequence, RunnablePassthrough } from "@langchain/core/runnables";
+import { StringOutputParser } from "@langchain/core/output_parsers";
+import { formatDocumentsAsString } from "langchain/util/document";
+import { PromptTemplate } from "@langchain/core/prompts";
+import { Book, Chunk } from "../types";
+
+if (!process.env.API_KEY) {
+  throw new Error("API_KEY environment variable not set");
+}
+
+// Initialize models
+const llm = new ChatGoogleGenerativeAI({
+  apiKey: process.env.API_KEY,
+  model: "gemini-2.0-flash-exp",
+  temperature: 0.3,
+});
+
+const embeddings = new GoogleGenerativeAIEmbeddings({
+  apiKey: process.env.API_KEY,
+  model: "text-embedding-004",
+});
+
+// Tool use tracking
+export interface ToolUse {
+  toolName: string;
+  input: any;
+  output?: any;
+  timestamp: number;
+}
+
+export interface ThoughtProcess {
+  stage: string;
+  thought: string;
+  timestamp: number;
+}
+
+export interface RAGResult {
+  answer: string;
+  toolUses: ToolUse[];
+  thoughts: ThoughtProcess[];
+  relevantChunks: Chunk[];
+}
+
+// In-memory vector store implementation
+class InMemoryVectorStore {
+  private documents: Document[] = [];
+  private embeddings: number[][] = [];
+
+  constructor(private embeddingModel: GoogleGenerativeAIEmbeddings) {}
+
+  async addDocuments(documents: Document[]) {
+    const texts = documents.map(doc => doc.pageContent);
+    const newEmbeddings = await this.embeddingModel.embedDocuments(texts);
+    this.documents.push(...documents);
+    this.embeddings.push(...newEmbeddings);
+  }
+
+  async similaritySearch(query: string, k: number = 5): Promise<Document[]> {
+    if (this.documents.length === 0) return [];
+
+    const queryEmbedding = await this.embeddingModel.embedQuery(query);
+
+    // Calculate similarities
+    const similarities = this.embeddings.map((embedding, index) => ({
+      index,
+      similarity: this.cosineSimilarity(queryEmbedding, embedding),
+      document: this.documents[index]
+    }));
+
+    // Sort and return top k
+    return similarities
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, k)
+      .filter(s => s.similarity > 0.3) // Threshold for relevance
+      .map(s => s.document);
+  }
+
+  private cosineSimilarity(vecA: number[], vecB: number[]): number {
+    const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+    const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+    const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
+    if (magnitudeA === 0 || magnitudeB === 0) return 0;
+    return dotProduct / (magnitudeA * magnitudeB);
+  }
+
+  clear() {
+    this.documents = [];
+    this.embeddings = [];
+  }
+}
+
+// Store for each book's vector store
+const bookVectorStores = new Map<string, InMemoryVectorStore>();
+
+// Initialize or get vector store for a book
+async function getOrCreateVectorStore(book: Book, callbacks?: RAGCallbacks): Promise<InMemoryVectorStore> {
+  if (bookVectorStores.has(book.id)) {
+    return bookVectorStores.get(book.id)!;
+  }
+
+  callbacks?.onProgress?.("Initializing vector store...");
+
+  const vectorStore = new InMemoryVectorStore(embeddings);
+
+  // Convert chunks to documents
+  const documents = book.chunks.map(chunk => new Document({
+    pageContent: chunk.content,
+    metadata: {
+      pageNumber: chunk.pageNumber,
+      chunkId: chunk.id,
+      bookId: chunk.bookId
+    }
+  }));
+
+  await vectorStore.addDocuments(documents);
+  bookVectorStores.set(book.id, vectorStore);
+
+  return vectorStore;
+}
+
+// Generate embeddings for chunks during book upload
+export async function generateEmbeddingsBatch(chunks: string[]): Promise<number[][]> {
+  try {
+    const embeddings_result = await embeddings.embedDocuments(chunks);
+    return embeddings_result;
+  } catch (error) {
+    console.error("Error generating embeddings:", error);
+    // Fallback to fake embeddings if the API fails
+    return chunks.map(chunk => {
+      const embedding = Array(768).fill(0);
+      for (let i = 0; i < chunk.length; i++) {
+        embedding[i % 768] += chunk.charCodeAt(i);
+      }
+      const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+      return norm === 0 ? embedding : embedding.map(v => v / norm);
+    });
+  }
+}
+
+export async function generateEmbedding(text: string): Promise<number[]> {
+  try {
+    const embedding = await embeddings.embedQuery(text);
+    return embedding;
+  } catch (error) {
+    console.error("Error generating embedding:", error);
+    // Fallback to fake embedding
+    const embedding = Array(768).fill(0);
+    for (let i = 0; i < text.length; i++) {
+      embedding[i % 768] += text.charCodeAt(i);
+    }
+    const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+    return norm === 0 ? embedding : embedding.map(v => v / norm);
+  }
+}
+
+// Multi-query retrieval - generate multiple search queries for comprehensive results
+async function multiQueryRetrieval(
+  vectorStore: InMemoryVectorStore,
+  query: string,
+  thoughts: ThoughtProcess[],
+  toolUses: ToolUse[],
+  callbacks?: RAGCallbacks
+): Promise<Document[]> {
+  const analysisThought: ThoughtProcess = {
+    stage: "Query Analysis",
+    thought: `Analyzing your question to generate multiple search perspectives...`,
+    timestamp: Date.now()
+  };
+  thoughts.push(analysisThought);
+  callbacks?.onThought?.(analysisThought);
+
+  // Generate multiple search queries
+  const queryGenerationPrompt = PromptTemplate.fromTemplate(`
+You are an AI assistant helping to search through a book.
+Given the user's question, generate 3 different search queries that would help find relevant information.
+These queries should explore different angles or aspects of the question.
+
+Original Question: {question}
+
+Generate 3 search queries (one per line, no numbering):
+`);
+
+  const queryChain = queryGenerationPrompt.pipe(llm).pipe(new StringOutputParser());
+
+  const queryGenTool: ToolUse = {
+    toolName: "Query Generation",
+    input: { originalQuery: query },
+    timestamp: Date.now()
+  };
+  toolUses.push(queryGenTool);
+  callbacks?.onToolUse?.(queryGenTool);
+
+  callbacks?.onProgress?.("Generating search queries...");
+
+  const generatedQueries = await queryChain.invoke({ question: query });
+  const queries = generatedQueries.split('\n').filter(q => q.trim()).slice(0, 3);
+  queries.unshift(query); // Include original query
+
+  queryGenTool.output = { queries };
+  callbacks?.onToolUse?.({ ...queryGenTool, output: { queries } });
+
+  const strategyThought: ThoughtProcess = {
+    stage: "Search Strategy",
+    thought: `Generated ${queries.length} search queries to explore different aspects of your question`,
+    timestamp: Date.now()
+  };
+  thoughts.push(strategyThought);
+  callbacks?.onThought?.(strategyThought);
+
+  // Search with all queries
+  const allDocs = new Map<string, Document>();
+
+  for (let i = 0; i < queries.length; i++) {
+    const searchQuery = queries[i];
+
+    callbacks?.onProgress?.(`Searching (${i + 1}/${queries.length}): "${searchQuery.substring(0, 30)}..."`);
+
+    const searchTool: ToolUse = {
+      toolName: "Vector Search",
+      input: { query: searchQuery, index: i + 1, total: queries.length },
+      timestamp: Date.now()
+    };
+    toolUses.push(searchTool);
+    callbacks?.onToolUse?.(searchTool);
+
+    const docs = await vectorStore.similaritySearch(searchQuery, 5);
+
+    searchTool.output = {
+      documentsFound: docs.length,
+      pages: docs.map(d => d.metadata.pageNumber)
+    };
+    callbacks?.onToolUse?.({ ...searchTool, output: searchTool.output });
+
+    docs.forEach(doc => {
+      const key = doc.metadata.chunkId || doc.pageContent.substring(0, 50);
+      allDocs.set(key, doc);
+    });
+  }
+
+  const uniqueDocs = Array.from(allDocs.values());
+
+  const completeThought: ThoughtProcess = {
+    stage: "Retrieval Complete",
+    thought: `Found ${uniqueDocs.length} unique relevant passages across ${queries.length} searches`,
+    timestamp: Date.now()
+  };
+  thoughts.push(completeThought);
+  callbacks?.onThought?.(completeThought);
+
+  return uniqueDocs;
+}
+
+// Chain of thought reasoning
+async function chainOfThoughtReasoning(
+  documents: Document[],
+  query: string,
+  thoughts: ThoughtProcess[],
+  toolUses: ToolUse[],
+  callbacks?: RAGCallbacks
+): Promise<string> {
+  const reasoningThought: ThoughtProcess = {
+    stage: "Reasoning",
+    thought: "Analyzing retrieved passages to construct a comprehensive answer...",
+    timestamp: Date.now()
+  };
+  thoughts.push(reasoningThought);
+  callbacks?.onThought?.(reasoningThought);
+
+  const reasoningPrompt = PromptTemplate.fromTemplate(`
+You are an AI assistant helping a user understand a book they are reading.
+
+Based on the following context from the book, provide a comprehensive answer to the user's question.
+Think step by step and consider multiple aspects of the question.
+
+Context from the book:
+{context}
+
+Question: {question}
+
+Instructions:
+1. First, identify the key aspects of the question
+2. Address each aspect using information from the context
+3. Synthesize the information into a coherent answer
+4. Include page citations in the format [p. X] or [pp. X-Y]
+5. If the context doesn't fully answer the question, acknowledge what's missing
+
+Answer:
+`);
+
+  const answerChain = reasoningPrompt
+    .pipe(llm)
+    .pipe(new StringOutputParser());
+
+  const answerGenTool: ToolUse = {
+    toolName: "Answer Generation",
+    input: {
+      question: query,
+      contextLength: documents.length
+    },
+    timestamp: Date.now()
+  };
+  toolUses.push(answerGenTool);
+  callbacks?.onToolUse?.(answerGenTool);
+
+  const context = documents.map(doc =>
+    `[Page ${doc.metadata.pageNumber}]: ${doc.pageContent}`
+  ).join('\n\n');
+
+  callbacks?.onProgress?.("Generating comprehensive answer...");
+
+  const answer = await answerChain.invoke({
+    context,
+    question: query
+  });
+
+  answerGenTool.output = {
+    answerLength: answer.length
+  };
+  callbacks?.onToolUse?.({ ...answerGenTool, output: answerGenTool.output });
+
+  const generatedThought: ThoughtProcess = {
+    stage: "Answer Generated",
+    thought: "Successfully synthesized information into a comprehensive response",
+    timestamp: Date.now()
+  };
+  thoughts.push(generatedThought);
+  callbacks?.onThought?.(generatedThought);
+
+  return answer;
+}
+
+// Main RAG pipeline with enhanced features
+export async function generateAnswer(book: Book, query: string, callbacks?: RAGCallbacks): Promise<RAGResult> {
+  const thoughts: ThoughtProcess[] = [];
+  const toolUses: ToolUse[] = [];
+
+  const initThought: ThoughtProcess = {
+    stage: "Initialization",
+    thought: `Starting enhanced RAG pipeline for: "${query.substring(0, 50)}${query.length > 50 ? '...' : ''}"`,
+    timestamp: Date.now()
+  };
+  thoughts.push(initThought);
+  callbacks?.onThought?.(initThought);
+
+  try {
+    // Get or create vector store
+    callbacks?.onProgress?.("Preparing vector database...");
+    const vectorStore = await getOrCreateVectorStore(book, callbacks);
+
+    // Multi-query retrieval
+    const relevantDocs = await multiQueryRetrieval(vectorStore, query, thoughts, toolUses, callbacks);
+
+    if (relevantDocs.length === 0) {
+      const noResultsThought: ThoughtProcess = {
+        stage: "No Results",
+        thought: "No relevant passages found in the book for this query",
+        timestamp: Date.now()
+      };
+      thoughts.push(noResultsThought);
+      callbacks?.onThought?.(noResultsThought);
+
+      return {
+        answer: "I couldn't find relevant information in the book to answer your question. The topic might not be covered in this text, or it might be phrased differently.",
+        toolUses,
+        thoughts,
+        relevantChunks: []
+      };
+    }
+
+    // Generate answer with chain of thought
+    const answer = await chainOfThoughtReasoning(relevantDocs, query, thoughts, toolUses, callbacks);
+
+    // Convert documents back to chunks for compatibility
+    const relevantChunks: Chunk[] = relevantDocs.map(doc => ({
+      id: doc.metadata.chunkId || `temp-${Date.now()}`,
+      bookId: book.id,
+      pageNumber: doc.metadata.pageNumber,
+      content: doc.pageContent,
+      embedding: [] // We don't need to return embeddings
+    }));
+
+    const completeThought: ThoughtProcess = {
+      stage: "Complete",
+      thought: "Successfully completed RAG pipeline",
+      timestamp: Date.now()
+    };
+    thoughts.push(completeThought);
+    callbacks?.onThought?.(completeThought);
+
+    return {
+      answer,
+      toolUses,
+      thoughts,
+      relevantChunks
+    };
+
+  } catch (error) {
+    console.error("Error in RAG pipeline:", error);
+
+    const errorThought: ThoughtProcess = {
+      stage: "Error",
+      thought: `Encountered an error: ${error}`,
+      timestamp: Date.now()
+    };
+    thoughts.push(errorThought);
+    callbacks?.onThought?.(errorThought);
+
+    return {
+      answer: "I apologize, but I encountered an error while processing your question. Please try again.",
+      toolUses,
+      thoughts,
+      relevantChunks: []
+    };
+  }
+}
+
+// For backward compatibility
+export { generateAnswer as default };
