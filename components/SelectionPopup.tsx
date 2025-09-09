@@ -40,9 +40,9 @@ const SelectionPopup: React.FC<SelectionPopupProps> = ({ x, y, onAction }) => {
       className="flex items-center rounded-full shadow-lg transition-all duration-150 ease-out overflow-hidden"
       onMouseDown={(e) => e.stopPropagation()} // Prevent closing popup when clicking it
     >
-        <ActionButton onClick={() => onAction('ask')} ariaLabel="Use selected text as reference in chat">
+        <ActionButton onClick={() => onAction('ask')} ariaLabel="Add selected text as reference in chat">
             <ChatIcon className="w-5 h-5" />
-            <span>Ask</span>
+            <span>Add Reference</span>
         </ActionButton>
         <div className="w-px h-5 self-center" style={{backgroundColor: 'rgba(250, 248, 243, 0.2)'}}></div>
         <ActionButton onClick={() => onAction('summarize')} ariaLabel="Summarize selected text">

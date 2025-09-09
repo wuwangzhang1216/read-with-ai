@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { ChatMessage } from '../types';
 import { CloseIcon, SendIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
@@ -24,7 +25,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
   isAiThinking,
   inputValue,
   onInputChange,
-  onNavigateToPage
+  onNavigateToPage,
 }) => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -97,7 +98,11 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
     });
   };
 
-  return (
+  if (!isOpen) {
+    return null;
+  }
+
+  const content = (
     <>
       <style>{`
         .prose-light {
@@ -147,14 +152,9 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
             font-family: monospace;
         }
       `}</style>
-      <div 
-        className={`fixed inset-0 bg-black/30 z-40 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-        onClick={onClose}
-        aria-hidden="true"
-      ></div>
       <div
-        className={`fixed top-0 right-0 h-full w-full max-w-lg shadow-2xl z-50 flex flex-col transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
-        style={{ backgroundColor: 'var(--bg-primary)', willChange: 'transform, opacity', transition: 'transform 0.3s ease-out, opacity 0.3s ease-out' }}
+        className="h-full w-full flex flex-col"
+        style={{ backgroundColor: 'var(--bg-primary)'}}
       >
         <header className="flex items-center justify-between p-4 border-b flex-shrink-0" style={{ borderColor: 'var(--border-color)'}}>
           <h2 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>AI Assistant</h2>
@@ -212,6 +212,8 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
     </>
   );
+
+  return content;
 };
 
 export default ChatPanel;

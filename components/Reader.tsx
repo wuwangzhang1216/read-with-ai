@@ -4,8 +4,8 @@ import { BackIcon, ChatIcon } from './icons/Icons';
 import ChatPanel from './ChatPanel';
 import * as geminiService from '../services/geminiService';
 import SelectionPopup from './SelectionPopup';
-
-declare const PDFObject: any;
+import WebViewer from '@pdftron/webviewer';
+import { createPortal } from 'react-dom';
 
 interface ReaderProps {
   book: Book;
@@ -20,8 +20,12 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [chatInputValue, setChatInputValue] = useState("");
   const [currentPage, setCurrentPage] = useState<number | null>(null);
+  const [webViewerInstance, setWebViewerInstance] = useState<any>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const chatPanelRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
+  const aiButtonAddedRef = useRef<boolean>(false);
+  const selectedTextRef = useRef('');
   const [selectionPopup, setSelectionPopup] = useState<{
     visible: boolean;
     x: number;
@@ -30,74 +34,157 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   }>({ visible: false, x: 0, y: 0, text: '' });
 
   useEffect(() => {
-    if (book && viewerRef.current) {
-      // Clear previous embed to avoid issues
-      viewerRef.current.innerHTML = '';
-      
-      const blob = new Blob([book.fileBuffer], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob) + (currentPage ? `#page=${currentPage}` : '');
-      
-      PDFObject.embed(url, viewerRef.current);
-      
-      // Clean up the object URL to avoid memory leaks when the component unmounts
-      // or the book changes. The re-rendering for page change is handled by the effect dependency array.
-      return () => {
-        URL.revokeObjectURL(url);
-      };
+    if (book && viewerRef.current && !webViewerInstance) {
+      // Initialize PDFtron WebViewer
+      WebViewer({
+        path: '/node_modules/@pdftron/webviewer/public/',
+        initialDoc: '',
+        licenseKey: undefined, // Add your license key if you have one
+      }, viewerRef.current).then(instance => {
+        setWebViewerInstance(instance);
+
+        // Load the PDF document
+        const blob = new Blob([book.fileBuffer], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        instance.UI.loadDocument(url, { filename: book.title });
+
+        // Register a WebViewer header button when UI is ready
+        const addHeaderButton = () => {
+          try {
+            if (aiButtonAddedRef.current) return;
+            if (instance && instance.UI && typeof instance.UI.setHeaderItems === 'function') {
+              const svg = `<?xml version="1.0" encoding="UTF-8"?>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 5.75A2.75 2.75 0 016.75 3h10.5A2.75 2.75 0 0120 5.75v7.5A2.75 2.75 0 0117.25 16H9.5l-4 3v-3.25A2.75 2.75 0 014 13.25v-7.5z" stroke="currentColor" stroke-width="1.5" fill="none"/>
+                <circle cx="8.5" cy="9.5" r="1" fill="currentColor"/>
+                <circle cx="12" cy="9.5" r="1" fill="currentColor"/>
+                <circle cx="15.5" cy="9.5" r="1" fill="currentColor"/>
+                </svg>`;
+              instance.UI.setHeaderItems((header: any) => {
+                header.push({
+                  type: 'actionButton',
+                  img: svg,
+                  title: 'AI Assistant',
+                  dataElement: 'ai-chat-toggle',
+                  onClick: () => setIsChatOpen((prev: boolean) => !prev),
+                });
+              });
+              aiButtonAddedRef.current = true;
+            }
+          } catch (e) {
+            console.warn('Unable to register WebViewer header button for AI chat:', e);
+          }
+        };
+
+        // In some builds, UI isn't ready immediately; wait for viewerLoaded
+        try {
+          if (instance && instance.UI && typeof instance.UI.addEventListener === 'function') {
+            instance.UI.addEventListener('viewerLoaded', () => {
+              addHeaderButton();
+              
+              instance.UI.textPopup.add({
+                type: 'actionButton',
+                title: 'Ask AI',
+                // Clean AI robot icon
+                img: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect width="18" height="10" x="3" y="11" rx="2"/>
+                  <circle cx="12" cy="5" r="2"/>
+                  <path d="m9 16 2-2 2 2"/>
+                  <circle cx="8" cy="14" r="1"/>
+                  <circle cx="16" cy="14" r="1"/>
+                </svg>`,
+                onClick: () => {
+                  try {
+                    const selectedText = instance.Core.documentViewer.getSelectedText();
+                    if (selectedText && selectedText.trim()) {
+                      handleSelectionAction('ask', selectedText);
+                    }
+                  } catch (e) {
+                    console.warn('Could not get selected text on button click:', e);
+                  }
+                }
+              }, 'copy');
+
+            });
+          }
+        } catch {}
+
+        // Also attempt immediately once
+        addHeaderButton();
+
+        // Navigate to specific page if currentPage is set
+        if (currentPage) {
+          instance.Core.documentViewer.setCurrentPage(currentPage);
+        }
+
+        // Clean up function
+        return () => {
+          URL.revokeObjectURL(url);
+        };
+      }).catch(error => {
+        console.error('Failed to initialize PDFtron WebViewer:', error);
+      });
+    } else if (webViewerInstance && currentPage) {
+      // Handle page navigation
+      webViewerInstance.Core.documentViewer.setCurrentPage(currentPage);
     }
-  }, [book, currentPage]);
+  }, [book, currentPage, webViewerInstance]);
 
   useEffect(() => {
-    const handleMouseUp = (e: MouseEvent) => {
-      // Don't do anything if we are clicking on the popup itself
-      if (popupRef.current?.contains(e.target as Node)) {
-        return;
-      }
+    if (!webViewerInstance) return;
 
-      // We need a small delay for the browser to register the selection
-      setTimeout(() => {
-        const selection = window.getSelection();
-        const selectedText = selection?.toString().trim() ?? '';
+    const { Core } = webViewerInstance;
+    const { documentViewer } = Core;
 
-        if (selectedText.length > 5 && selection && selection.rangeCount > 0) {
-          try {
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            const viewerRect = viewerRef.current?.getBoundingClientRect();
-
-            // Check if the selection is visible and inside the viewer bounds.
-            if (viewerRect && rect.width > 0 && 
-                rect.top >= viewerRect.top && 
-                rect.bottom <= viewerRect.bottom &&
-                rect.left >= viewerRect.left &&
-                rect.right <= viewerRect.right) 
-            {
-              setSelectionPopup({
-                visible: true,
-                x: rect.left + rect.width / 2,
-                y: rect.top,
-                text: selectedText,
-              });
-            } else {
-              setSelectionPopup(prev => ({ ...prev, visible: false }));
-            }
-          } catch (err) {
-            console.warn("Could not get range from selection", err);
-            setSelectionPopup(prev => ({ ...prev, visible: false }));
-          }
-        } else {
-          // If no text is selected, or we clicked away, hide the popup.
-          setSelectionPopup(prev => ({ ...prev, visible: false }));
+    const handleTextSelection = () => {
+      try {
+        const newSelection = documentViewer.getSelectedText();
+        // Only update the ref if the new selection is a non-empty, non-whitespace string
+        if (newSelection && newSelection.trim()) {
+          selectedTextRef.current = newSelection;
         }
-      }, 10);
+      } catch (e) {
+        console.warn('Could not get selected text:', e);
+        selectedTextRef.current = '';
+      }
     };
 
-    // Attach to the document to capture all mouseup events
-    document.addEventListener('mouseup', handleMouseUp);
+    documentViewer.addEventListener('textSelected', handleTextSelection);
+
     return () => {
-      document.removeEventListener('mouseup', handleMouseUp);
+      documentViewer.removeEventListener('textSelected', handleTextSelection);
     };
-  }, []);
+  }, [webViewerInstance]);
+
+  useEffect(() => {
+    if (webViewerInstance) {
+      // Give the animations time to complete
+      setTimeout(() => {
+        webViewerInstance.UI.resize();
+      }, 300);
+    }
+  }, [isChatOpen, webViewerInstance]);
+
+  /* 
+    This useEffect is now disabled. We keep it here for reference.
+    It handled the custom selection popup. Now we use the native PDFTron popup.
+  */
+  // useEffect(() => {
+  //   if (!webViewerInstance) return;
+
+  //   const Core = webViewerInstance.Core;
+  //   const documentViewer = Core.documentViewer;
+
+  //   const handleTextSelection = () => {
+  //     // We are now using the native PDFTron popup
+  //   };
+
+  //   documentViewer.addEventListener('textSelected', handleTextSelection);
+
+  //   return () => {
+  //     documentViewer.removeEventListener('textSelected', handleTextSelection);
+  //   };
+  // }, [webViewerInstance]);
 
   const handleNavigateToPage = (page: number) => {
     setCurrentPage(page);
@@ -122,16 +209,19 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     }
   };
 
-  const handleSelectionAction = async (action: SelectionAction) => {
-    if (!selectionPopup.text) return;
+  const handleSelectionAction = async (action: SelectionAction, text?: string) => {
+    const selectedText = text || selectedTextRef.current;
+
+    if (!selectedText) return;
     
-    const selectedText = selectionPopup.text;
     setSelectionPopup({ visible: false, x: 0, y: 0, text: '' }); 
     setIsChatOpen(true);
 
     if (action === 'ask') {
-        const quotedText = `Regarding the text:\n\n> ${selectedText.replace(/^/gm, '> ')}\n\n`;
-        setChatInputValue(prev => prev ? `${prev.trim()}\n\n${quotedText}` : quotedText);
+        // Add selected text as a quoted reference in the chat input
+        const quotedBlock = selectedText.replace(/^/gm, '> ');
+        const toInsert = `${quotedBlock}`;
+        setChatInputValue(prev => prev ? `${prev.trim()}\n\n${toInsert}` : toInsert);
     } else {
         setIsAiThinking(true);
         let prompt = '';
@@ -159,15 +249,13 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             </button>
             <h1 className="ml-4 text-xl font-semibold truncate" style={{ color: 'var(--text-primary)'}}>{book.title}</h1>
         </div>
-        <div className="flex items-center">
-          <button onClick={() => setIsChatOpen(true)} className="p-2 rounded-full hover:bg-gray-200/60 transition-colors" aria-label="Open AI assistant" style={{ color: 'var(--text-secondary)' }}>
-            <ChatIcon className="w-6 h-6" />
-          </button>
-        </div>
+        {/* Chat toggle moved into WebViewer header; keeping right side minimal */}
+        <div className="flex items-center" />
       </header>
       
-      <div className="flex-grow relative min-h-0 overflow-hidden">
-        {selectionPopup.visible && (
+      <div className="flex-grow relative min-h-0 overflow-hidden flex">
+        {/* The custom selection popup is now disabled in favor of the native one */}
+        {/* {selectionPopup.visible && (
             <div ref={popupRef}>
                 <SelectionPopup
                     x={selectionPopup.x}
@@ -175,22 +263,53 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                     onAction={handleSelectionAction}
                 />
             </div>
-        )}
+        )} */}
         <div 
           ref={viewerRef} 
-          className="w-full h-full" 
-          style={{ transform: 'translateZ(0)' }} // Promote to its own rendering layer to prevent flicker
+          className="h-full"
+          style={{ 
+            transform: 'translateZ(0)', 
+            flex: 1, 
+            overflow: 'hidden',
+            transition: 'width 300ms ease-in-out',
+            width: isChatOpen ? 'calc(100% - 480px)' : '100%'
+          }}
         />
-        <ChatPanel 
-            isOpen={isChatOpen}
-            onClose={() => setIsChatOpen(false)}
-            chatHistory={chatHistory}
-            onSendMessage={handleSendMessage}
-            isAiThinking={isAiThinking}
-            inputValue={chatInputValue}
-            onInputChange={setChatInputValue}
-            onNavigateToPage={handleNavigateToPage}
-        />
+        {/* Fallback floating chat button inside the viewer container */}
+        {!isChatOpen && (
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="absolute bottom-6 right-6 p-3 rounded-full shadow-lg hover:opacity-90 transition"
+            style={{ backgroundColor: '#3b82f6', color: 'white', zIndex: 60 }}
+            aria-label="Open AI assistant"
+            title="Open AI assistant"
+          >
+            <ChatIcon className="w-6 h-6" />
+          </button>
+        )}
+        <div 
+            ref={chatPanelRef}
+            className="transition-all duration-300 ease-in-out"
+            style={{
+                width: isChatOpen ? '480px' : '0px',
+                overflow: 'hidden',
+                flexShrink: 0,
+                height: '100%',
+                backgroundColor: 'var(--bg-primary)',
+                borderLeft: isChatOpen ? '1px solid var(--border-color)' : 'none'
+            }}
+        >
+            <ChatPanel 
+                isOpen={isChatOpen}
+                onClose={() => setIsChatOpen(false)}
+                chatHistory={chatHistory}
+                onSendMessage={handleSendMessage}
+                isAiThinking={isAiThinking}
+                inputValue={chatInputValue}
+                onInputChange={setChatInputValue}
+                onNavigateToPage={handleNavigateToPage}
+            />
+        </div>
       </div>
     </div>
   );
