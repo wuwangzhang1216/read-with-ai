@@ -3,8 +3,10 @@ import { Book, Chunk } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
 import * as enhancedRagService from '../services/enhancedRagService';
-
-declare const pdfjsLib: any;
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+// Use the same worker wiring as the viewer to avoid version mismatch
+// @ts-ignore - Vite worker URL import
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&url';
 
 interface LibraryProps {
   books: Book[];
@@ -30,12 +32,11 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
       setProcessingStatus('Reading file...');
       const fileBuffer = await file.arrayBuffer();
 
-      if (typeof pdfjsLib === 'undefined') {
-        throw new Error('pdf.js library is not loaded.');
-      }
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js`;
-      
-      const pdf = await pdfjsLib.getDocument({ data: fileBuffer.slice(0) }).promise;
+      // Align worker version with bundled API version
+      // @ts-ignore
+      GlobalWorkerOptions.workerSrc = pdfjsWorker;
+      // Slice to pass a copy, preserving the original buffer used by the viewer
+      const pdf = await getDocument({ data: fileBuffer.slice(0) }).promise;
       
       let fullText = '';
       const chunks: Omit<Chunk, 'id' | 'embedding'>[] = [];

@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { ChatMessage } from '../types';
-import { CloseIcon, SendIcon, ChevronDownIcon, ChevronRightIcon } from './icons/Icons';
+import { CloseIcon, SendIcon, ChevronDownIcon, ChevronRightIcon, EditIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
 import { ThoughtProcess, ToolUse } from '../services/enhancedRagService';
 import MarkdownMessage from './MarkdownMessage';
@@ -16,6 +16,7 @@ interface EnhancedChatPanelProps {
   onClose: () => void;
   chatHistory: EnhancedChatMessage[];
   onSendMessage: (message: string) => void;
+  onResendEdited: (message: string) => void;
   isAiThinking: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
@@ -24,6 +25,16 @@ interface EnhancedChatPanelProps {
   currentToolUses?: ToolUse[];
   messageReceived?: boolean;
   currentProgress?: string;
+  // Thread tabs
+  threads: { id: string; title: string }[];
+  activeThreadId: string;
+  onSelectThread: (id: string) => void;
+  onNewThread: () => void;
+  onCloseThread?: (id: string) => void;
+  // Edit & resend
+  editingIndex: number | null;
+  onStartEditMessage: (index: number, content: string) => void;
+  onCancelEdit: () => void;
 }
 
 const ThinkingIndicator: React.FC<{
@@ -35,83 +46,41 @@ const ThinkingIndicator: React.FC<{
   const [expanded, setExpanded] = useState(true);
   const latestThought = thoughts[thoughts.length - 1];
   const latestTool = toolUses[toolUses.length - 1];
-
+  const activeIndex = Math.max(0, thoughts.length - 1);
   return (
     <div className="message-bubble assistant w-full">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium"
-               style={{ backgroundColor: 'rgba(44, 62, 80, 0.1)', color: '#2c3e50' }}>
-            <Spinner className="w-4 h-4 thinking-pulse" />
-            <span>
-              {messageReceived ? "Message received..." :
-               progress || (latestThought ? latestThought.stage : "Thinking...")}
-            </span>
-          </div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium"
+             style={{ backgroundColor: 'rgba(44, 62, 80, 0.08)', color: '#2c3e50' }}>
+          <Spinner className="w-4 h-4 thinking-pulse" />
+          <span>
+            {messageReceived ? 'Message received…' : progress || (latestThought ? latestThought.stage : 'Thinking…')}
+          </span>
+          {thoughts.length > 0 && (
+            <span className="opacity-70 ml-1">· Step {activeIndex + 1}</span>
+          )}
         </div>
         <button
           onClick={() => setExpanded(!expanded)}
           className="p-1.5 rounded-lg hover:bg-black/5 transition-all duration-200 hover:scale-105"
           style={{ color: 'var(--text-secondary)' }}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
         >
-          {expanded ?
-            <ChevronDownIcon className="w-4 h-4" /> :
+          {expanded ? (
+            <ChevronDownIcon className="w-4 h-4" />
+          ) : (
             <ChevronRightIcon className="w-4 h-4" />
-          }
+          )}
         </button>
       </div>
 
       {expanded && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {thoughts.length > 0 && (
-            <div>
-              <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-                Reasoning Process
-              </h4>
-              <div className="space-y-3">
-                {thoughts.map((thought, idx) => (
-                  <div key={idx} className="flex items-start gap-3 p-3 rounded-lg"
-                       style={{ backgroundColor: 'rgba(232, 228, 219, 0.4)' }}>
-                    <div className="w-2 h-2 rounded-full mt-2 flex-shrink-0"
-                         style={{ backgroundColor: '#2c3e50' }}></div>
-                    <div className="flex-1">
-                      <div className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
-                        {thought.stage}
-                      </div>
-                      <div className="text-sm opacity-80" style={{ color: 'var(--text-secondary)' }}>
-                        {thought.thought}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <ReasoningSteps thoughts={thoughts} activeIndex={activeIndex} />
           )}
 
-          {toolUses.length > 0 && (
-            <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
-              <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
-                Tools Used
-              </h4>
-              <div className="space-y-2">
-                {toolUses.map((tool, idx) => (
-                  <div key={idx} className="flex items-center gap-3 p-3 rounded-lg"
-                       style={{ backgroundColor: 'rgba(34, 197, 94, 0.05)', border: '1px solid rgba(34, 197, 94, 0.2)' }}>
-                    <div className="px-3 py-1 rounded-full text-xs font-medium"
-                         style={{ backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>
-                      {tool.toolName}
-                    </div>
-                    {tool.output && (
-                      <div className="text-xs opacity-70" style={{ color: 'var(--text-secondary)' }}>
-                        {tool.output.documentsFound && `Found ${tool.output.documentsFound} passages`}
-                        {tool.output.queries && `Generated ${tool.output.queries.length} queries`}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Tools UI removed per request */}
         </div>
       )}
     </div>
@@ -130,66 +99,18 @@ const MessageWithProcess: React.FC<{
       {message.thoughts && message.thoughts.length > 0 && (
         <button
           onClick={() => setShowProcess(!showProcess)}
-          className="inline-flex items-center gap-2 text-sm opacity-70 hover:opacity-100 mb-4 px-3 py-2 rounded-lg transition-all duration-200 hover:scale-[1.02]"
+          className="inline-flex items-center gap-2 text-sm opacity-80 hover:opacity-100 mb-3 px-3 py-2 rounded-md transition-all duration-200"
           style={{ color: 'var(--text-secondary)', backgroundColor: 'rgba(44, 62, 80, 0.08)' }}
         >
           {showProcess ? <ChevronDownIcon className="w-4 h-4" /> : <ChevronRightIcon className="w-4 h-4" />}
-          <span className="font-medium">View reasoning process</span>
+          <span className="font-medium">Reasoning Process</span>
         </button>
       )}
 
       {showProcess && message.thoughts && (
-        <div className="mb-4 p-4 rounded-xl text-sm" style={{
-          backgroundColor: 'rgba(34, 197, 94, 0.05)',
-          border: '1px solid rgba(34, 197, 94, 0.2)'
-        }}>
-          <div className="font-semibold mb-3 flex items-center gap-2" style={{ color: '#2c3e50' }}>
-            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#2c3e50' }}></div>
-            Reasoning Process
-          </div>
-          <div className="space-y-2">
-            {message.thoughts.map((thought, idx) => (
-              <div key={idx} className="flex items-start gap-3 p-2 rounded-md"
-                   style={{ backgroundColor: 'rgba(255, 255, 255, 0.5)' }}>
-                <span className="text-xs font-medium opacity-70 mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  {idx + 1}
-                </span>
-                <div className="flex-1">
-                  <div className="font-medium text-sm mb-1" style={{ color: 'var(--text-primary)' }}>
-                    {thought.stage}
-                  </div>
-                  <div className="text-sm opacity-80" style={{ color: 'var(--text-secondary)' }}>
-                    {thought.thought}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {message.toolUses && message.toolUses.length > 0 && (
-            <div className="mt-4 pt-3 border-t" style={{ borderColor: 'rgba(34, 197, 94, 0.2)' }}>
-              <div className="font-semibold mb-2 flex items-center gap-2" style={{ color: '#2c3e50' }}>
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#2c3e50' }}></div>
-                Tools Used
-              </div>
-              <div className="space-y-2">
-                {message.toolUses.map((tool, idx) => (
-                  <div key={idx} className="flex items-center gap-2 p-2 rounded-md"
-                       style={{ backgroundColor: 'rgba(255, 255, 255, 0.5)' }}>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-                          style={{ backgroundColor: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>
-                      {tool.toolName}
-                    </span>
-                    {tool.output?.documentsFound && (
-                      <span className="text-xs opacity-70" style={{ color: 'var(--text-secondary)' }}>
-                        {tool.output.documentsFound} results
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        <div className="mb-4 p-4 rounded-xl text-sm" style={{ backgroundColor: 'rgba(240, 237, 230, 0.6)', border: '1px solid var(--border-color)' }}>
+          <ReasoningSteps thoughts={message.thoughts} />
+          {/* Tools UI removed per request */}
         </div>
       )}
 
@@ -205,6 +126,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   onClose,
   chatHistory,
   onSendMessage,
+  onResendEdited,
   isAiThinking,
   inputValue,
   onInputChange,
@@ -213,9 +135,19 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   currentToolUses = [],
   messageReceived = false,
   currentProgress = "",
+  threads,
+  activeThreadId,
+  onSelectThread,
+  onNewThread,
+  onCloseThread,
+  editingIndex,
+  onStartEditMessage,
+  onCancelEdit,
 }) => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const endOfMessagesRef = useRef<HTMLDivElement>(null);
+  const [autoStickToBottom, setAutoStickToBottom] = useState(true);
 
   useEffect(() => {
     if (isOpen) {
@@ -223,18 +155,33 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
     }
   }, [isOpen]);
 
+  const handleScrollContainer = () => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+    const threshold = 60; // px from bottom considered as "at bottom"
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    setAutoStickToBottom(atBottom);
+  };
+
   useEffect(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    if (!isOpen) return;
+    if (autoStickToBottom) {
+      // Scroll a sentinel into view to handle animated height changes
+      endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [chatHistory, isAiThinking, currentThoughts]);
+  }, [chatHistory, isAiThinking, currentThoughts, currentToolUses, currentProgress, messageReceived, isOpen, autoStickToBottom]);
+
 
   const handleSendMessage = () => {
     if (inputValue.trim() && !isAiThinking) {
       // Immediate visual feedback
       const trimmedMessage = inputValue.trim();
       onInputChange(''); // Clear input immediately
-      onSendMessage(trimmedMessage);
+      if (editingIndex !== null && editingIndex >= 0) {
+        onResendEdited(trimmedMessage);
+      } else {
+        onSendMessage(trimmedMessage);
+      }
     }
   };
 
@@ -417,6 +364,91 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           background: linear-gradient(135deg, rgba(44, 62, 80, 0.1) 0%, rgba(44, 62, 80, 0.05) 100%);
           border: 1px solid rgba(44, 62, 80, 0.2);
         }
+
+        /* Minimal step-by-step reasoning timeline */
+        .steps {
+          position: relative;
+        }
+        .step-item {
+          display: grid;
+          grid-template-columns: 20px 1fr;
+          gap: 10px;
+          align-items: start;
+          opacity: 0;
+          transform: translateY(6px);
+          animation: fadeInUp 300ms ease forwards;
+        }
+        .step-dot {
+          width: 8px;
+          height: 8px;
+          border-radius: 9999px;
+          margin-top: 6px;
+          background-color: var(--border-color);
+        }
+        .step-item.active .step-dot { background-color: #2c3e50; }
+        .step-item.complete .step-dot { background-color: #2c3e50; opacity: 0.6; }
+        .step-line {
+          grid-column: 1 / 2;
+          width: 2px;
+          background-color: var(--border-color);
+          justify-self: center;
+        }
+        .step-title { font-weight: 600; color: var(--text-primary); }
+        .step-sub { color: var(--text-secondary); opacity: 0.9; }
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Reserved for future exit animations */
+
+        /* Compact icon buttons (Codex-like) */
+        .icon-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 28px;
+          height: 28px;
+          border-radius: 8px;
+          border: 1px solid var(--border-color);
+          background: rgba(255,255,255,0.16);
+          color: var(--text-secondary);
+          transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
+        }
+        .icon-btn:hover { background: rgba(0,0,0,0.06); }
+        .icon-btn.primary {
+          background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+          color: #ffffff;
+          border: 1px solid rgba(255,255,255,0.2);
+        }
+        .icon-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+      `}</style>
+      <style>{`
+        /* Edit area default (light) */
+        .edit-textarea {
+          background: transparent;
+          border: 2px solid var(--border-color);
+          color: var(--text-primary);
+          resize: vertical;
+          outline: none;
+          box-shadow: none;
+          font-family: inherit;
+        }
+        .edit-textarea::placeholder { color: var(--text-secondary); opacity: 0.8; }
+        .edit-badge { background-color: rgba(44,62,80,0.08); border: 1px solid var(--border-color); color: var(--text-primary); }
+
+        /* Dark user bubble overrides for readability */
+        .message-bubble.user .edit-textarea {
+          background: rgba(255,255,255,0.10);
+          border-color: rgba(255,255,255,0.28);
+          color: #ffffff;
+        }
+        .message-bubble.user .edit-textarea::placeholder { color: rgba(255,255,255,0.75); }
+        .message-bubble.user .edit-toolbar .icon-btn { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.28); color: #ffffff; }
+        .message-bubble.user .edit-badge { background-color: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.28); color: #ffffff; }
+        .message-bubble.user .icon-btn { color: #ffffff; border-color: rgba(255,255,255,0.28); background: rgba(255,255,255,0.12); }
+        .message-bubble.user .icon-btn.primary { background: linear-gradient(135deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.18) 100%); color: #1e293b; border-color: rgba(255,255,255,0.35); }
+        .message-bubble.user .edit-hint { color: rgba(255,255,255,0.75) !important; }
       `}</style>
 
       <div className="h-full w-full flex flex-col" style={{ backgroundColor: 'var(--bg-primary)' }}>
@@ -445,13 +477,112 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
             <CloseIcon className="w-5 h-5" />
           </button>
         </header>
+        {/* Thread Tabs */}
+        <div className="flex items-center px-3 py-2 border-b gap-2 overflow-x-auto"
+             style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-primary)' }}>
+          {threads.map((t) => {
+            const isActive = t.id === activeThreadId;
+            return (
+              <div key={t.id}
+                   className={`flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer whitespace-nowrap transition-all ${isActive ? 'shadow-sm' : ''}`}
+                   onClick={() => onSelectThread(t.id)}
+                   style={{
+                     backgroundColor: isActive ? 'rgba(44,62,80,0.1)' : 'transparent',
+                     border: '1px solid var(--border-color)',
+                     color: 'var(--text-primary)'
+                   }}>
+                <span className="text-sm font-medium max-w-[160px] truncate">{t.title || 'New Chat'}</span>
+                {onCloseThread && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onCloseThread(t.id); }}
+                    className="p-1 rounded hover:bg-black/5"
+                    title="Close thread"
+                    aria-label="Close thread"
+                    style={{ color: 'var(--text-secondary)' }}>
+                    ×
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          <button
+            onClick={onNewThread}
+            className="ml-1 px-2 py-1.5 rounded-lg border text-sm flex items-center gap-1 hover:bg-black/5"
+            style={{ borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+            title="New chat"
+            aria-label="Create new chat thread"
+          >
+            <span className="text-base leading-none">＋</span>
+            <span className="hidden sm:inline">New</span>
+          </button>
+        </div>
 
-        <div ref={chatContainerRef} className="flex-grow p-6 overflow-y-auto space-y-6">
+        <div ref={chatContainerRef} onScroll={handleScrollContainer} className="flex-grow p-6 overflow-y-auto space-y-6">
           {chatHistory.map((msg, index) => (
             <AnimatedMessage key={index} delay={index * 150} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'user' && index === chatHistory.length - 1 && messageReceived ? 'message-received' : ''}`}>
               <div className={`w-full px-5 py-4 rounded-2xl message-bubble ${msg.role === 'user' ? 'user' : 'assistant'}`}>
                 {msg.role === 'user' ? (
-                  <div className="whitespace-pre-wrap text-[15px] leading-relaxed font-medium">{msg.content}</div>
+                  editingIndex === index ? (
+                    <div className="group/edit relative edit-area">
+                      <div className="flex items-center justify-between mb-2 edit-toolbar">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full edit-badge">正在编辑</span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={onCancelEdit}
+                            className="icon-btn"
+                            aria-label="取消编辑"
+                            title="Esc 取消"
+                          >
+                            <CloseIcon className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            disabled={!inputValue.trim() || isAiThinking}
+                            onClick={() => onResendEdited(inputValue.trim())}
+                            className="icon-btn primary"
+                            aria-label="保存并重发"
+                            title="Ctrl/⌘ + Enter 重发"
+                          >
+                            <SendIcon className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        value={inputValue}
+                        onChange={(e) => onInputChange(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                            e.preventDefault();
+                            if (inputValue.trim()) onResendEdited(inputValue.trim());
+                          }
+                          if (e.key === 'Escape') {
+                            e.preventDefault();
+                            onCancelEdit();
+                          }
+                        }}
+                        className="w-full rounded-xl px-4 py-3 text-[15px] edit-textarea"
+                        rows={Math.min(8, Math.max(2, Math.ceil((inputValue?.length || 0) / 40)))}
+                        placeholder="编辑此消息…"
+                        autoFocus
+                      />
+                      <div className="mt-1 text-[11px] opacity-70 text-right edit-hint">Ctrl/⌘ + Enter 重发 · Esc 取消</div>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <div className="whitespace-pre-wrap text-[15px] leading-relaxed font-medium">{msg.content}</div>
+                      <div className="absolute -top-2 -right-2">
+                        <button
+                          disabled={isAiThinking}
+                          onClick={() => onStartEditMessage(index, msg.content)}
+                          className="icon-btn"
+                          style={{ cursor: isAiThinking ? 'not-allowed' : 'pointer' }}
+                          title="编辑并重发"
+                          aria-label="Edit and resend"
+                        >
+                          <EditIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )
                 ) : (
                   <div className="prose-light">
                     <MessageWithProcess message={msg} onNavigateToPage={onNavigateToPage} />
@@ -460,19 +591,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
               </div>
             </AnimatedMessage>
           ))}
-
-          {isAiThinking && (
-            <AnimatedMessage delay={chatHistory.length * 150} className="flex justify-start">
-              <div className="w-full">
-                <ThinkingIndicator
-                  thoughts={currentThoughts}
-                  toolUses={currentToolUses}
-                  messageReceived={messageReceived}
-                  progress={currentProgress}
-                />
-              </div>
-            </AnimatedMessage>
-          )}
+          <div ref={endOfMessagesRef} />
         </div>
 
         <div className="p-5 border-t flex-shrink-0"
@@ -485,7 +604,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
                 value={inputValue}
                 onChange={(e) => onInputChange(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about the book... (Press Enter to send)"
+                placeholder={editingIndex !== null ? "编辑消息后回车重发..." : "Ask about the book... (Press Enter to send)"}
                 disabled={isAiThinking}
                 className="chat-input w-full px-5 py-3.5 border-2 rounded-2xl focus:outline-none transition-all duration-200 text-[14px]"
               />
@@ -499,6 +618,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
               <SendIcon className="w-5 h-5" />
             </button>
           </div>
+          {/* Inline editing provides its own toolbar; bottom banner removed for cleaner design */}
           {isAiThinking && currentProgress && (
             <div className="mt-3 text-sm opacity-70 text-center progress-text font-medium"
                  style={{ color: 'var(--text-secondary)' }}>
@@ -525,3 +645,30 @@ export const ChevronRightIcon: React.FC<{ className?: string }> = ({ className =
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
   </svg>
 );
+
+// Minimal, Codex-like step timeline for reasoning
+const ReasoningSteps: React.FC<{ thoughts: ThoughtProcess[]; activeIndex?: number }> = ({ thoughts, activeIndex }) => {
+  const last = typeof activeIndex === 'number' ? activeIndex : thoughts.length - 1;
+  return (
+    <div className="steps">
+      {thoughts.map((t, idx) => (
+        <div
+          key={idx}
+          className={`step-item ${idx === last ? 'active' : idx < last ? 'complete' : ''}`}
+          style={{ animationDelay: `${idx * 80}ms` }}
+        >
+          <div>
+            <div className="step-dot" />
+            {idx < thoughts.length - 1 && (
+              <div className="step-line" style={{ height: 22 }} />
+            )}
+          </div>
+          <div>
+            <div className="step-title text-sm">{`${idx + 1}. ${t.stage}`}</div>
+            <div className="step-sub text-sm">{t.thought}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};

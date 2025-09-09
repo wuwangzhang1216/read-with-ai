@@ -70,3 +70,9 @@ export const ChevronRightIcon: React.FC<IconProps> = ({ className = "w-4 h-4", s
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
   </svg>
 );
+
+export const EditIcon: React.FC<IconProps> = ({ className = "w-4 h-4", style }) => (
+  <svg className={className} style={style} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 3.487a2.25 2.25 0 113.182 3.182L7.5 19.313 3 21l1.687-4.5L16.862 3.487z" />
+  </svg>
+);

@@ -37,6 +37,7 @@ const App: React.FC = () => {
   const handleDeleteBook = async (bookId: string) => {
     try {
       await dbService.deleteBook(bookId);
+      try { await dbService.deleteChatThreadsForBook(bookId); } catch {}
       const updatedBooks = books.filter(book => book.id !== bookId);
       setBooks(updatedBooks);
     } catch (error) {

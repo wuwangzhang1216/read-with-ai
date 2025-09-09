@@ -3,8 +3,9 @@ import { Book, ChatMessage } from '../types';
 import { BackIcon, ChatIcon } from './icons/Icons';
 import EnhancedChatPanel, { EnhancedChatMessage } from './EnhancedChatPanel';
 import * as enhancedRagService from '../services/enhancedRagService';
+import * as dbService from '../services/dbService';
 import SelectionPopup from './SelectionPopup';
-import WebViewer from '@pdftron/webviewer';
+import PdfJsViewer from './PdfJsViewer';
 import { createPortal } from 'react-dom';
 import { ThoughtProcess, ToolUse } from '../services/enhancedRagService';
 
@@ -15,21 +16,34 @@ interface ReaderProps {
 
 type SelectionAction = 'ask' | 'summarize' | 'explain';
 
+interface ChatThread {
+  id: string;
+  title: string;
+  messages: EnhancedChatMessage[];
+  createdAt: number;
+  bookId: string;
+}
+
+type ThreadEphemeralState = {
+  inputValue: string;
+  isAiThinking: boolean;
+  currentThoughts: ThoughtProcess[];
+  currentToolUses: ToolUse[];
+  currentProgress: string;
+  messageReceived: boolean;
+  editingIndex: number | null;
+};
+
 const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatHistory, setChatHistory] = useState<EnhancedChatMessage[]>([]);
-  const [isAiThinking, setIsAiThinking] = useState(false);
-  const [chatInputValue, setChatInputValue] = useState("");
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string>('');
+  const [threadStates, setThreadStates] = useState<Record<string, ThreadEphemeralState>>({});
   const [currentPage, setCurrentPage] = useState<number | null>(null);
-  const [webViewerInstance, setWebViewerInstance] = useState<any>(null);
-  const [currentThoughts, setCurrentThoughts] = useState<ThoughtProcess[]>([]);
-  const [currentToolUses, setCurrentToolUses] = useState<ToolUse[]>([]);
-  const [currentProgress, setCurrentProgress] = useState<string>("");
-  const [messageReceived, setMessageReceived] = useState(false);
+  // Per-thread ephemeral state is tracked in threadStates
   const viewerRef = useRef<HTMLDivElement>(null);
   const chatPanelRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const aiButtonAddedRef = useRef<boolean>(false);
   const selectedTextRef = useRef('');
   const [selectionPopup, setSelectionPopup] = useState<{
     visible: boolean;
@@ -38,175 +52,226 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     text: string;
   }>({ visible: false, x: 0, y: 0, text: '' });
 
-  useEffect(() => {
-    if (book && viewerRef.current && !webViewerInstance) {
-      // Initialize PDFtron WebViewer
-      WebViewer({
-        path: '/node_modules/@pdftron/webviewer/public/',
-        initialDoc: '',
-        licenseKey: undefined, // Add your license key if you have one
-      }, viewerRef.current).then(instance => {
-        setWebViewerInstance(instance);
+  // Normalize selected text to better match visual selection
+  const normalizeSelectedText = (s: string) => {
+    if (!s) return s;
+    let t = s.replace(/\r/g, '');
+    // Join hyphenated line-breaks like "exam-\nple" -> "example"
+    t = t.replace(/([A-Za-z])-[\t\x0B\f\v ]*\n[\t\x0B\f\v ]*([A-Za-z])/g, '$1$2');
+    // Collapse other line breaks to spaces
+    t = t.replace(/[\t\x0B\f\v ]*\n[\t\x0B\f\v ]*/g, ' ');
+    // Collapse multiple spaces
+    t = t.replace(/\s{2,}/g, ' ').trim();
+    return t;
+  };
 
-        // Load the PDF document
-        const blob = new Blob([book.fileBuffer], { type: 'application/pdf' });
-        const url = URL.createObjectURL(blob);
-        instance.UI.loadDocument(url, { filename: book.title });
+  // Thread management helpers and persistence
+  const keyForBook = (b: Book) => `chatThreads:${b.id}`;
 
-        // Register a WebViewer header button when UI is ready
-        const addHeaderButton = () => {
-          try {
-            if (aiButtonAddedRef.current) return;
-            if (instance && instance.UI && typeof instance.UI.setHeaderItems === 'function') {
-              const svg = `<?xml version="1.0" encoding="UTF-8"?>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M4 5.75A2.75 2.75 0 016.75 3h10.5A2.75 2.75 0 0120 5.75v7.5A2.75 2.75 0 0117.25 16H9.5l-4 3v-3.25A2.75 2.75 0 014 13.25v-7.5z" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                <circle cx="8.5" cy="9.5" r="1" fill="currentColor"/>
-                <circle cx="12" cy="9.5" r="1" fill="currentColor"/>
-                <circle cx="15.5" cy="9.5" r="1" fill="currentColor"/>
-                </svg>`;
-              instance.UI.setHeaderItems((header: any) => {
-                header.push({
-                  type: 'actionButton',
-                  img: svg,
-                  title: 'AI Assistant (Enhanced RAG)',
-                  dataElement: 'ai-chat-toggle',
-                  onClick: () => setIsChatOpen((prev: boolean) => !prev),
-                });
-              });
-              aiButtonAddedRef.current = true;
-            }
-          } catch (e) {
-            console.warn('Unable to register WebViewer header button for AI chat:', e);
-          }
-        };
-
-        // In some builds, UI isn't ready immediately; wait for viewerLoaded
-        try {
-          if (instance && instance.UI && typeof instance.UI.addEventListener === 'function') {
-            instance.UI.addEventListener('viewerLoaded', () => {
-              addHeaderButton();
-              
-              instance.UI.textPopup.add({
-                type: 'actionButton',
-                title: 'Ask AI',
-                // Clean AI robot icon
-                img: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <rect width="18" height="10" x="3" y="11" rx="2"/>
-                  <circle cx="12" cy="5" r="2"/>
-                  <path d="m9 16 2-2 2 2"/>
-                  <circle cx="8" cy="14" r="1"/>
-                  <circle cx="16" cy="14" r="1"/>
-                </svg>`,
-                onClick: () => {
-                  try {
-                    const selectedText = instance.Core.documentViewer.getSelectedText();
-                    if (selectedText && selectedText.trim()) {
-                      handleSelectionAction('ask', selectedText);
-                    }
-                  } catch (e) {
-                    console.warn('Could not get selected text on button click:', e);
-                  }
-                }
-              }, 'copy');
-
-              instance.UI.textPopup.add({
-                type: 'actionButton',
-                title: 'Summarize',
-                img: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12"/>
-                </svg>`,
-                onClick: () => {
-                  try {
-                    const selectedText = instance.Core.documentViewer.getSelectedText();
-                    if (selectedText && selectedText.trim()) {
-                      handleSelectionAction('summarize', selectedText);
-                    }
-                  } catch (e) {
-                    console.warn('Could not get selected text on button click:', e);
-                  }
-                }
-              });
-
-              instance.UI.textPopup.add({
-                type: 'actionButton',
-                title: 'Explain',
-                img: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="10"/>
-                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-                  <line x1="12" y1="17" x2="12.01" y2="17"/>
-                </svg>`,
-                onClick: () => {
-                  try {
-                    const selectedText = instance.Core.documentViewer.getSelectedText();
-                    if (selectedText && selectedText.trim()) {
-                      handleSelectionAction('explain', selectedText);
-                    }
-                  } catch (e) {
-                    console.warn('Could not get selected text on button click:', e);
-                  }
-                }
-              });
-
-            });
-          }
-        } catch {}
-
-        // Also attempt immediately once
-        addHeaderButton();
-
-        // Navigate to specific page if currentPage is set
-        if (currentPage) {
-          instance.Core.documentViewer.setCurrentPage(currentPage);
+  const ensureThreadState = (threadId: string) => {
+    setThreadStates(prev => {
+      if (prev[threadId]) return prev;
+      return {
+        ...prev,
+        [threadId]: {
+          inputValue: '',
+          isAiThinking: false,
+          currentThoughts: [],
+          currentToolUses: [],
+          currentProgress: '',
+          messageReceived: false,
+          editingIndex: null,
         }
+      };
+    });
+  };
 
-        // Clean up function
-        return () => {
-          URL.revokeObjectURL(url);
-        };
-      }).catch(error => {
-        console.error('Failed to initialize PDFtron WebViewer:', error);
-      });
-    } else if (webViewerInstance && currentPage) {
-      // Handle page navigation
-      webViewerInstance.Core.documentViewer.setCurrentPage(currentPage);
+  const createNewThread = (title: string = 'New Chat'): string => {
+    const id = `thread-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+    const newThread: ChatThread = { id, title, messages: [], createdAt: Date.now(), bookId: book.id };
+    setThreads(prev => [...prev, newThread]);
+    ensureThreadState(id);
+    setActiveThreadId(id);
+    return id;
+  };
+
+  const selectThread = (id: string) => {
+    setActiveThreadId(id);
+    ensureThreadState(id);
+  };
+
+  const closeThread = async (id: string) => {
+    setThreads(prev => prev.filter(t => t.id !== id));
+    setThreadStates(prev => {
+      const { [id]: _, ...rest } = prev;
+      return rest;
+    });
+    try { await dbService.deleteChatThread(id); } catch {}
+    if (activeThreadId === id) {
+      setTimeout(() => {
+        setThreads(curr => {
+          if (curr.length > 0) {
+            const fallback = curr[curr.length - 1].id;
+            setActiveThreadId(fallback);
+            return curr;
+          }
+          const newId = `thread-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+          setActiveThreadId(newId);
+          return [{ id: newId, title: 'New Chat', messages: [], createdAt: Date.now(), bookId: book.id }];
+        });
+      }, 0);
     }
-  }, [book, currentPage, webViewerInstance]);
+  };
 
+  // Load threads for this book from IndexedDB
   useEffect(() => {
-    if (!webViewerInstance) return;
-
-    const { Core } = webViewerInstance;
-    const { documentViewer } = Core;
-
-    const handleTextSelection = () => {
+    let cancelled = false;
+    (async () => {
       try {
-        const newSelection = documentViewer.getSelectedText();
-        // Only update the ref if the new selection is a non-empty, non-whitespace string
-        if (newSelection && newSelection.trim()) {
-          selectedTextRef.current = newSelection;
+        const existing = await dbService.getChatThreads(book.id);
+        if (cancelled) return;
+        if (existing && existing.length > 0) {
+          const normalized: ChatThread[] = existing.map(t => ({
+            id: t.id,
+            title: t.title,
+            messages: t.messages as EnhancedChatMessage[],
+            createdAt: t.createdAt,
+            bookId: t.bookId,
+          }));
+          setThreads(normalized);
+          const last = normalized[normalized.length - 1];
+          setActiveThreadId(last.id);
+          ensureThreadState(last.id);
+        } else {
+          const id = createNewThread();
+          setActiveThreadId(id);
         }
-      } catch (e) {
-        console.warn('Could not get selected text:', e);
-        selectedTextRef.current = '';
+      } catch {
+        const id = createNewThread();
+        setActiveThreadId(id);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [book.id]);
+
+  // Persist threads when they change (IndexedDB)
+  useEffect(() => {
+    if (!book?.id) return;
+    (async () => {
+      try {
+        await Promise.all(threads.filter(t => t.bookId === book.id).map(t => dbService.saveChatThread({
+          id: t.id,
+          bookId: t.bookId,
+          title: t.title,
+          messages: t.messages as any,
+          createdAt: t.createdAt,
+          updatedAt: Date.now(),
+        })));
+      } catch {
+        // ignore persistence errors
+      }
+    })();
+  }, [book, threads]);
+
+  const activeThread = threads.find(t => t.id === activeThreadId) || null;
+  const activeState: ThreadEphemeralState = activeThreadId && threadStates[activeThreadId]
+    ? threadStates[activeThreadId]
+    : { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false, editingIndex: null };
+
+  // Handle text selection within the PDF.js viewer to show our popup
+  useEffect(() => {
+    const root = viewerRef.current;
+    if (!root) return;
+    // The scrollable element is the inner PDF.js container
+    const scrollEl: HTMLElement | null = root.querySelector('.pdfViewerContainer');
+
+    const isNodeInside = (node: Node | null, rootEl: HTMLElement) => {
+      if (!node) return false;
+      let cur: Node | null = node;
+      while (cur) {
+        if (cur === rootEl) return true;
+        cur = (cur as HTMLElement).parentNode;
+      }
+      return false;
+    };
+
+    const handleMouseUp = () => {
+      // Delay a tick to allow selection to finalize
+      setTimeout(() => {
+        try {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+            return;
+          }
+          const anchorNode = sel.anchorNode;
+          if (!anchorNode || !isNodeInside(anchorNode, root)) {
+            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+            return;
+          }
+          // Limit to textLayer selection for best accuracy
+          const textLayer = (anchorNode as HTMLElement).closest?.('.textLayer');
+          if (!textLayer) {
+            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+            return;
+          }
+          const text = normalizeSelectedText(sel.toString());
+          if (!text || !text.trim()) {
+            setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+            return;
+          }
+          selectedTextRef.current = text;
+          const range = sel.getRangeAt(0);
+          const rect = range.getBoundingClientRect();
+          // Position in viewport coordinates; popup uses fixed positioning
+          const x = rect.left + rect.width / 2;
+          const y = rect.top;
+          setSelectionPopup({ visible: true, x, y, text });
+        } catch {
+          setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+        }
+      }, 0);
+    };
+
+    const handleScroll = () => {
+      setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+    };
+
+    const handleGlobalMouseDown = (e: MouseEvent) => {
+      // Don't hide if clicking inside the popup
+      const pop = popupRef.current;
+      if (pop && pop.contains(e.target as Node)) return;
+      setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectionPopup({ visible: false, x: 0, y: 0, text: '' });
       }
     };
 
-    documentViewer.addEventListener('textSelected', handleTextSelection);
+    // Attach listeners
+    root.addEventListener('mouseup', handleMouseUp);
+    scrollEl?.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('mousedown', handleGlobalMouseDown);
+    window.addEventListener('keydown', handleKeyDown);
 
     return () => {
-      documentViewer.removeEventListener('textSelected', handleTextSelection);
+      root.removeEventListener('mouseup', handleMouseUp);
+      scrollEl?.removeEventListener('scroll', handleScroll as any);
+      window.removeEventListener('mousedown', handleGlobalMouseDown as any);
+      window.removeEventListener('keydown', handleKeyDown as any);
     };
-  }, [webViewerInstance]);
+  }, [viewerRef]);
 
+  // Trigger a layout update after the chat panel animates, so PDF.js fits width
   useEffect(() => {
-    if (webViewerInstance) {
-      // Give the animations time to complete
-      setTimeout(() => {
-        webViewerInstance.UI.resize();
-      }, 300);
-    }
-  }, [isChatOpen, webViewerInstance]);
+    const timeout = setTimeout(() => {
+      try { window.dispatchEvent(new Event('resize')); } catch {}
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [isChatOpen]);
 
   /* 
     This useEffect is now disabled. We keep it here for reference.
@@ -234,36 +299,117 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   };
 
   const handleSendMessage = async (message: string) => {
+    if (!activeThread) return;
+    const threadId = activeThread.id;
     const userMessage: EnhancedChatMessage = { role: 'user', content: message };
-    setChatHistory(prev => [...prev, userMessage]);
-    setIsAiThinking(true);
-    setMessageReceived(true);
-    setCurrentThoughts([]);
-    setCurrentToolUses([]);
-    setCurrentProgress("");
+    // Append user message and a streaming assistant placeholder
+    setThreads(prev => prev.map(t => t.id === threadId ? {
+      ...t,
+      messages: [...t.messages, userMessage, { role: 'assistant', content: '', thoughts: [], toolUses: [] }]
+    } : t));
+    // If first message, set title
+    if ((activeThread.messages?.length || 0) === 0) {
+      const newTitle = message.trim().split('\n')[0].slice(0, 40) + (message.length > 40 ? '…' : '');
+      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle || 'New Chat' } : t));
+    }
+    // Set ephemeral state for this thread
+    setThreadStates(prev => ({
+      ...prev,
+      [threadId]: {
+        ...(prev[threadId] || activeState),
+        inputValue: '',
+        isAiThinking: true,
+        messageReceived: true,
+        currentThoughts: [],
+        currentToolUses: [],
+        currentProgress: '',
+      }
+    }));
 
     try {
       // Use enhanced RAG service with real-time callbacks
       const result = await enhancedRagService.generateAnswer(book, message, {
         onThought: (thought) => {
-          setCurrentThoughts(prev => [...prev, thought]);
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentThoughts: [ ...(prev[threadId]?.currentThoughts || []), thought ],
+            }
+          }));
+          // Also mirror into the last assistant message
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, thoughts: [ ...(last.thoughts || []), thought ] };
+            }
+            return { ...t, messages: msgs };
+          }));
         },
         onToolUse: (tool) => {
-          setCurrentToolUses(prev => [...prev, tool]);
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentToolUses: [ ...(prev[threadId]?.currentToolUses || []), tool ],
+            }
+          }));
+          // Mirror into last assistant message as metadata
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, toolUses: [ ...(last.toolUses || []), tool ] } as any;
+            }
+            return { ...t, messages: msgs };
+          }));
         },
         onProgress: (progress) => {
-          setCurrentProgress(progress);
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentProgress: progress,
+            }
+          }));
+        },
+        onToken: (token) => {
+          // Append streaming token to the last assistant message
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, content: (last.content || '') + token };
+            }
+            return { ...t, messages: msgs };
+          }));
+        },
+        onDone: () => {
+          // no-op here; finalization below will set toolUses/thoughts
         }
       });
 
-      const aiMessage: EnhancedChatMessage = {
-        role: 'assistant',
-        content: result.answer,
-        thoughts: result.thoughts,
-        toolUses: result.toolUses
-      };
-
-      setChatHistory(prev => [...prev, aiMessage]);
+      // Update last assistant message with final metadata; content already streamed
+      setThreads(prev => prev.map(t => {
+        if (t.id !== threadId) return t;
+        const msgs = [...t.messages];
+        const lastIdx = msgs.length - 1;
+        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+          const last = msgs[lastIdx] as EnhancedChatMessage;
+          msgs[lastIdx] = { ...last, thoughts: result.thoughts, toolUses: result.toolUses };
+        }
+        return { ...t, messages: msgs };
+      }));
     } catch (error) {
       console.error("Failed to get answer from AI:", error);
       const errorMessage: EnhancedChatMessage = {
@@ -275,13 +421,179 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           timestamp: Date.now()
         }]
       };
-      setChatHistory(prev => [...prev, errorMessage]);
+      // Replace last assistant placeholder with error
+      setThreads(prev => prev.map(t => {
+        if (t.id !== threadId) return t;
+        const msgs = [...t.messages];
+        const lastIdx = msgs.length - 1;
+        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+          msgs[lastIdx] = errorMessage;
+        } else {
+          msgs.push(errorMessage);
+        }
+        return { ...t, messages: msgs };
+      }));
     } finally {
-      setIsAiThinking(false);
-      setMessageReceived(false);
-      setCurrentThoughts([]);
-      setCurrentToolUses([]);
-      setCurrentProgress("");
+      setThreadStates(prev => ({
+        ...prev,
+        [threadId]: {
+          ...(prev[threadId] || activeState),
+          ...prev[threadId],
+          isAiThinking: false,
+          messageReceived: false,
+          // keep progress/thoughts/toolUses to show in UI until next message
+        }
+      }));
+    }
+  };
+
+  const handleResendEdited = async (newMessage: string) => {
+    if (!activeThread) return;
+    const threadId = activeThread.id;
+    const editIndex = activeState.editingIndex ?? -1;
+    if (editIndex < 0) return;
+
+    // Replace the target user message and trim conversation after it
+    setThreads(prev => prev.map(t => {
+      if (t.id !== threadId) return t;
+      const msgs = [...t.messages];
+      if (msgs[editIndex]?.role === 'user') {
+        msgs[editIndex] = { role: 'user', content: newMessage } as EnhancedChatMessage;
+      }
+      const trimmed = msgs.slice(0, editIndex + 1);
+      // Add assistant placeholder for streaming
+      trimmed.push({ role: 'assistant', content: '', thoughts: [], toolUses: [] } as EnhancedChatMessage);
+      return { ...t, messages: trimmed };
+    }));
+
+    // If edited the first message, update title
+    if (editIndex === 0) {
+      const newTitle = newMessage.trim().split('\n')[0].slice(0, 40) + (newMessage.length > 40 ? '…' : '');
+      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: newTitle || 'New Chat' } : t));
+    }
+
+    // Reset ephemeral state and start thinking
+    setThreadStates(prev => ({
+      ...prev,
+      [threadId]: {
+        ...(prev[threadId] || activeState),
+        inputValue: '',
+        isAiThinking: true,
+        messageReceived: true,
+        currentThoughts: [],
+        currentToolUses: [],
+        currentProgress: '',
+        editingIndex: null,
+      }
+    }));
+
+    try {
+      const result = await enhancedRagService.generateAnswer(book, newMessage, {
+        onThought: (thought) => {
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentThoughts: [ ...(prev[threadId]?.currentThoughts || []), thought ],
+            }
+          }));
+          // Mirror into last assistant message
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, thoughts: [ ...(last.thoughts || []), thought ] };
+            }
+            return { ...t, messages: msgs };
+          }));
+        },
+        onToolUse: (tool) => {
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentToolUses: [ ...(prev[threadId]?.currentToolUses || []), tool ],
+            }
+          }));
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, toolUses: [ ...(last.toolUses || []), tool ] } as any;
+            }
+            return { ...t, messages: msgs };
+          }));
+        },
+        onProgress: (progress) => {
+          setThreadStates(prev => ({
+            ...prev,
+            [threadId]: {
+              ...(prev[threadId] || activeState),
+              ...prev[threadId],
+              currentProgress: progress,
+            }
+          }));
+        },
+        onToken: (token) => {
+          setThreads(prev => prev.map(t => {
+            if (t.id !== threadId) return t;
+            const msgs = [...t.messages];
+            const lastIdx = msgs.length - 1;
+            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+              const last = msgs[lastIdx] as EnhancedChatMessage;
+              msgs[lastIdx] = { ...last, content: (last.content || '') + token };
+            }
+            return { ...t, messages: msgs };
+          }));
+        },
+        onDone: () => {}
+      });
+
+      // Finalize last assistant message
+      setThreads(prev => prev.map(t => {
+        if (t.id !== threadId) return t;
+        const msgs = [...t.messages];
+        const lastIdx = msgs.length - 1;
+        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+          const last = msgs[lastIdx] as EnhancedChatMessage;
+          msgs[lastIdx] = { ...last, thoughts: result.thoughts, toolUses: result.toolUses };
+        }
+        return { ...t, messages: msgs };
+      }));
+    } catch (error) {
+      console.error('Failed to regenerate after edit:', error);
+      const errorMessage: EnhancedChatMessage = {
+        role: 'assistant',
+        content: 'Sorry, I encountered an error while reprocessing your edited message.',
+        thoughts: [{ stage: 'Error', thought: 'Error during edited resend', timestamp: Date.now() }]
+      };
+      setThreads(prev => prev.map(t => {
+        if (t.id !== threadId) return t;
+        const msgs = [...t.messages];
+        const lastIdx = msgs.length - 1;
+        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+          msgs[lastIdx] = errorMessage;
+        } else {
+          msgs.push(errorMessage);
+        }
+        return { ...t, messages: msgs };
+      }));
+    } finally {
+      setThreadStates(prev => ({
+        ...prev,
+        [threadId]: {
+          ...(prev[threadId] || activeState),
+          ...prev[threadId],
+          isAiThinking: false,
+          messageReceived: false,
+        }
+      }));
     }
   };
 
@@ -294,16 +606,18 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     setIsChatOpen(true);
 
     if (action === 'ask') {
-      // Add selected text as a quoted reference
+      // Add selected text as a quoted reference into current thread input
       const quotedBlock = selectedText.replace(/^/gm, '> ');
       const toInsert = `Regarding this passage from the book:\n\n${quotedBlock}\n\n`;
-      setChatInputValue(prev => prev ? `${prev.trim()}\n\n${toInsert}` : toInsert);
+      setThreadStates(prev => ({
+        ...prev,
+        [activeThreadId]: {
+          ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false }),
+          ...prev[activeThreadId],
+          inputValue: (prev[activeThreadId]?.inputValue ? `${prev[activeThreadId]!.inputValue.trim()}\n\n${toInsert}` : toInsert)
+        }
+      }));
     } else {
-      setIsAiThinking(true);
-      setMessageReceived(true);
-      setCurrentThoughts([]);
-      setCurrentToolUses([]);
-      setCurrentProgress("");
       let prompt = '';
       if (action === 'summarize') {
         prompt = `Please provide a comprehensive summary of the following passage from the book. Include the main ideas, key points, and any important details:\n\n"${selectedText}"`;
@@ -312,10 +626,24 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       }
 
       if (prompt) {
-        setChatInputValue('');
+        setThreadStates(prev => ({
+          ...prev,
+          [activeThreadId]: {
+            ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false }),
+            ...prev[activeThreadId],
+            inputValue: ''
+          }
+        }));
         await handleSendMessage(prompt);
       } else {
-        setIsAiThinking(false);
+        setThreadStates(prev => ({
+          ...prev,
+          [activeThreadId]: {
+            ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false }),
+            ...prev[activeThreadId],
+            isAiThinking: false
+          }
+        }));
       }
     }
   };
@@ -329,21 +657,11 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             </button>
             <h1 className="ml-4 text-xl font-semibold truncate" style={{ color: 'var(--text-primary)'}}>{book.title}</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs px-3 py-1 rounded-full"
-                style={{
-                  backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                  color: '#22c55e',
-                  border: '1px solid rgba(34, 197, 94, 0.2)'
-                }}>
-            Enhanced RAG Active
-          </span>
-        </div>
+        <div className="flex items-center gap-2" />
       </header>
       
       <div className="flex-grow relative min-h-0 overflow-hidden flex">
-        {/* The custom selection popup is now disabled in favor of the native one */}
-        {/* {selectionPopup.visible && (
+        {selectionPopup.visible && (
             <div ref={popupRef}>
                 <SelectionPopup
                     x={selectionPopup.x}
@@ -351,18 +669,27 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                     onAction={handleSelectionAction}
                 />
             </div>
-        )} */}
+        )}
         <div 
           ref={viewerRef} 
           className="h-full"
           style={{ 
-            transform: 'translateZ(0)', 
             flex: 1, 
             overflow: 'hidden',
+            position: 'relative',
             transition: 'width 300ms ease-in-out',
             width: isChatOpen ? 'calc(100% - 520px)' : '100%'
           }}
-        />
+        >
+          {/* Embed PDF.js viewer */}
+          <PdfJsViewer
+            fileBuffer={book.fileBuffer}
+            title={book.title}
+            currentPage={currentPage}
+            onPageChange={(p) => setCurrentPage(p)}
+            initialScale={'page-fit'}
+          />
+        </div>
         {/* Fallback floating chat button inside the viewer container */}
         {!isChatOpen && (
           <button
@@ -402,16 +729,48 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             <EnhancedChatPanel
                 isOpen={isChatOpen}
                 onClose={() => setIsChatOpen(false)}
-                chatHistory={chatHistory}
+                chatHistory={activeThread?.messages || []}
                 onSendMessage={handleSendMessage}
-                isAiThinking={isAiThinking}
-                inputValue={chatInputValue}
-                onInputChange={setChatInputValue}
+                onResendEdited={handleResendEdited}
+                isAiThinking={activeState.isAiThinking}
+                inputValue={activeState.inputValue}
+                onInputChange={(v) => setThreadStates(prev => ({
+                  ...prev,
+                  [activeThreadId]: {
+                    ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false }),
+                    ...prev[activeThreadId],
+                    inputValue: v,
+                  }
+                }))}
                 onNavigateToPage={handleNavigateToPage}
-                currentThoughts={currentThoughts}
-                currentToolUses={currentToolUses}
-                messageReceived={messageReceived}
-                currentProgress={currentProgress}
+                currentThoughts={activeState.currentThoughts}
+                currentToolUses={activeState.currentToolUses}
+                messageReceived={activeState.messageReceived}
+                currentProgress={activeState.currentProgress}
+                threads={threads.map(t => ({ id: t.id, title: t.title }))}
+                activeThreadId={activeThreadId}
+                onSelectThread={selectThread}
+                onNewThread={() => createNewThread()}
+                onCloseThread={closeThread}
+                editingIndex={activeState.editingIndex ?? null}
+                onStartEditMessage={(index, content) => setThreadStates(prev => ({
+                  ...prev,
+                  [activeThreadId]: {
+                    ...(prev[activeThreadId] || activeState),
+                    ...prev[activeThreadId],
+                    editingIndex: index,
+                    inputValue: content,
+                  }
+                }))}
+                onCancelEdit={() => setThreadStates(prev => ({
+                  ...prev,
+                  [activeThreadId]: {
+                    ...(prev[activeThreadId] || activeState),
+                    ...prev[activeThreadId],
+                    editingIndex: null,
+                    inputValue: '',
+                  }
+                }))}
             />
         </div>
       </div>

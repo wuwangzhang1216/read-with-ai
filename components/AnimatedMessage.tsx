@@ -31,7 +31,7 @@ const AnimatedMessage: React.FC<AnimatedMessageProps> = ({
       }}
     >
       {children}
-      <style jsx>{`
+      <style>{`
         @keyframes slideInFade {
           from {
             opacity: 0;

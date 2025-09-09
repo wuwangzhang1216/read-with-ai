@@ -45,6 +45,15 @@ export interface RAGResult {
   relevantChunks: Chunk[];
 }
 
+// Callbacks for streaming and telemetry
+export interface RAGCallbacks {
+  onThought?: (t: ThoughtProcess) => void;
+  onToolUse?: (t: ToolUse) => void;
+  onProgress?: (text: string) => void;
+  onToken?: (token: string) => void; // streaming tokens for the final answer
+  onDone?: () => void;               // fired when streaming completes
+}
+
 // In-memory vector store implementation
 class InMemoryVectorStore {
   private documents: Document[] = [];
@@ -176,12 +185,17 @@ async function multiQueryRetrieval(
   // Generate multiple search queries
   const queryGenerationPrompt = PromptTemplate.fromTemplate(`
 You are an AI assistant helping to search through a book.
-Given the user's question, generate 3 different search queries that would help find relevant information.
-These queries should explore different angles or aspects of the question.
+Your goal is to find relevant passages efficiently by crafting diverse, high-yield search queries.
+
+Given the user's question, generate 3 different search queries that explore distinct angles or aspects of the question.
+- Prefer concrete key terms from the question; add synonyms where helpful.
+- If the question is not in English and the content might be English, include at least one English variant.
+- Keep queries concise (6–12 words) and avoid punctuation noise.
 
 Original Question: {question}
 
-Generate 3 search queries (one per line, no numbering):
+Output exactly 3 queries, one per line, no numbering.
+After producing the queries, internally reflect on whether these cover likely aspects (do not output the reflection).
 `);
 
   const queryChain = queryGenerationPrompt.pipe(llm).pipe(new StringOutputParser());
@@ -205,7 +219,7 @@ Generate 3 search queries (one per line, no numbering):
 
   const strategyThought: ThoughtProcess = {
     stage: "Search Strategy",
-    thought: `Generated ${queries.length} search queries to explore different aspects of your question`,
+    thought: `Generated ${queries.length} search queries to explore different aspects; will search and reassess coverage.`,
     timestamp: Date.now()
   };
   thoughts.push(strategyThought);
@@ -274,7 +288,9 @@ async function chainOfThoughtReasoning(
 You are an AI assistant helping a user understand a book they are reading.
 
 Based on the following context from the book, provide a comprehensive answer to the user's question.
-Think step by step and consider multiple aspects of the question.
+Think step by step and consider multiple aspects of the question. Use the retrieved context carefully and avoid fabricating details.
+
+IMPORTANT: Respond in the same language as the user's question. If the question is bilingual or mixed, use the primary language.
 
 Context from the book:
 {context}
@@ -282,11 +298,12 @@ Context from the book:
 Question: {question}
 
 Instructions:
-1. First, identify the key aspects of the question
+1. Identify the key aspects of the question
 2. Address each aspect using information from the context
 3. Synthesize the information into a coherent answer
 4. Include page citations in the format [p. X] or [pp. X-Y]
-5. If the context doesn't fully answer the question, acknowledge what's missing
+5. If the context doesn't fully answer the question, explicitly state limitations
+6. Before finalizing, quickly self-check for contradictions or missing steps
 
 Answer:
 `);
@@ -312,10 +329,15 @@ Answer:
 
   callbacks?.onProgress?.("Generating comprehensive answer...");
 
-  const answer = await answerChain.invoke({
-    context,
-    question: query
-  });
+  // Stream tokens so UI can render incremental response
+  let answer = "";
+  const stream = await answerChain.stream({ context, question: query });
+  for await (const chunk of stream) {
+    const token = typeof chunk === 'string' ? chunk : String(chunk);
+    answer += token;
+    callbacks?.onToken?.(token);
+  }
+  callbacks?.onDone?.();
 
   answerGenTool.output = {
     answerLength: answer.length
@@ -353,6 +375,15 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
 
     // Multi-query retrieval
     const relevantDocs = await multiQueryRetrieval(vectorStore, query, thoughts, toolUses, callbacks);
+
+    // Post-retrieval reflection (think after tool use)
+    const retrievalReflection: ThoughtProcess = {
+      stage: "Post-Retrieval Reflection",
+      thought: `Retrieved ${relevantDocs.length} relevant passages. Proceeding to synthesize an answer using citations.`,
+      timestamp: Date.now()
+    };
+    thoughts.push(retrievalReflection);
+    callbacks?.onThought?.(retrievalReflection);
 
     if (relevantDocs.length === 0) {
       const noResultsThought: ThoughtProcess = {
@@ -409,8 +440,22 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
     thoughts.push(errorThought);
     callbacks?.onThought?.(errorThought);
 
+    // Attempt to return an error message in the same language as the user's query
+    let localized = "I encountered an error while processing your question. Please try again.";
+    try {
+      const prompt = PromptTemplate.fromTemplate(`
+Rewrite the following message so that it uses the same language as this user question.
+Keep it concise and polite. Output only the rewritten sentence.
+
+Question: {question}
+Message: {message}
+`);
+      const chain = prompt.pipe(llm).pipe(new StringOutputParser());
+      localized = await chain.invoke({ question: query, message: localized });
+    } catch {}
+
     return {
-      answer: "I apologize, but I encountered an error while processing your question. Please try again.",
+      answer: localized,
       toolUses,
       thoughts,
       relevantChunks: []
