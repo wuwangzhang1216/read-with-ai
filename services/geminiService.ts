@@ -96,7 +96,7 @@ export async function generateAnswer(book: Book, query: string): Promise<string>
   
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-2.5-pro',
       contents: prompt,
     });
     
