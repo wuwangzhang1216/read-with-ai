@@ -594,6 +594,9 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         onDone: () => {
           // no-op here; finalization below will set toolUses/thoughts
         }
+      }, {
+        chatHistory: (activeThread?.messages || []).map(m => ({ role: m.role, content: m.content })),
+        threadId: activeThread?.id || undefined,
       });
 
       // Update last assistant message with final metadata; content already streamed
@@ -834,6 +837,9 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           });
         },
         onDone: () => {}
+      }, {
+        chatHistory: (threads.find(t => t.id === threadId)?.messages || []).map(m => ({ role: m.role, content: m.content })),
+        threadId,
       });
 
       // Finalize last assistant message

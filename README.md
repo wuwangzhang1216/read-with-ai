@@ -18,3 +18,11 @@ View your app in AI Studio: https://ai.studio/apps/drive/1Hn7XMfyIw9qdlWMIfqesnx
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Chat History Search
+
+The assistant now includes a chat-history search tool in addition to book vector search.
+
+- The agent dynamically decides whether to search the book, chat history, or both, based on the question.
+- A flexible system prompt describes available tools (not hard-coded to one behavior).
+- In the chat UI, you’ll see tool events like "Tool Selection" and "Chat History Search" during reasoning.

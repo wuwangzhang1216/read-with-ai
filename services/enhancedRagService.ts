@@ -6,7 +6,7 @@ import { RunnableSequence, RunnablePassthrough } from "@langchain/core/runnables
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { formatDocumentsAsString } from "langchain/util/document";
 import { PromptTemplate } from "@langchain/core/prompts";
-import { Book, Chunk } from "../types";
+import { Book, Chunk, ChatMessage } from "../types";
 
 if (!process.env.API_KEY) {
   throw new Error("API_KEY environment variable not set");
@@ -15,7 +15,7 @@ if (!process.env.API_KEY) {
 // Initialize models
 const llm = new ChatGoogleGenerativeAI({
   apiKey: process.env.API_KEY,
-  model: "gemini-2.5-flash",
+  model: "gemini-2.5-pro",
   temperature: 0.3,
 });
 
@@ -43,6 +43,7 @@ export interface RAGResult {
   toolUses: ToolUse[];
   thoughts: ThoughtProcess[];
   relevantChunks: Chunk[];
+  relevantChatMessages?: { index: number; role: string; content: string }[];
 }
 
 // Callbacks for streaming and telemetry
@@ -166,6 +167,99 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   }
 }
 
+// ------------------------------
+// Flexible system instructions
+// ------------------------------
+function buildSystemInstructions(availableTools: string[] = ["Vector Search (book)", "Chat History Search"]): string {
+  const toolsList = availableTools.map(t => `- ${t}`).join("\n");
+  return `You are an AI reading assistant. You may use available tools as needed to answer questions.\n\nTools you can leverage:\n${toolsList}\n\nGuidelines:\n- Prefer facts from the book via Vector Search when possible.\n- Use Chat History Search to recover prior context, assumptions, or follow-up continuity.\n- When both are useful, use both.\n- Answer in the user's language, be precise, and cite book pages.\n`;
+}
+
+// ------------------------------
+// Tool selection (decide sources)
+// ------------------------------
+async function decideRetrievalSources(query: string, recentHistory: string): Promise<{ useBook: boolean; useChat: boolean; reason: string }> {
+  const system = buildSystemInstructions(["Vector Search (book)", "Chat History Search"]);
+  const decisionPrompt = PromptTemplate.fromTemplate(`
+{system}
+You are deciding which sources to consult to answer a user question. You have these tools:
+- book_search: searches the current book content via vector search.
+- chat_history_search: searches the current conversation history to recover prior context or maintain continuity.
+
+Return a JSON object only, strictly of the form:
+{"useBook": true|false, "useChat": true|false, "reason": "short reason"}
+
+Defaults: useBook=true, useChat=false unless the question clearly depends on prior conversation or requires continuity.
+
+Question:
+{question}
+
+Recent Conversation Snippet:
+{history}
+
+JSON:`);
+
+  const chain = decisionPrompt.pipe(llm).pipe(new StringOutputParser());
+  try {
+    const raw = await chain.invoke({ system, question: query, history: recentHistory });
+    const parsed = JSON.parse(raw.trim());
+    return {
+      useBook: typeof parsed.useBook === 'boolean' ? parsed.useBook : true,
+      useChat: typeof parsed.useChat === 'boolean' ? parsed.useChat : false,
+      reason: typeof parsed.reason === 'string' ? parsed.reason : 'defaulted'
+    };
+  } catch {
+    return { useBook: true, useChat: false, reason: 'fallback-default' };
+  }
+}
+
+// ------------------------------
+// Chat History Search tool
+// ------------------------------
+type ChatSnippet = { index: number; role: 'user' | 'assistant'; content: string };
+
+async function searchChatHistory(chatHistory: ChatMessage[], query: string, k: number = 5): Promise<ChatSnippet[]> {
+  if (!chatHistory || chatHistory.length === 0) return [];
+  // Limit to last N messages to control cost
+  const MAX_MESSAGES = 80;
+  const start = Math.max(0, chatHistory.length - MAX_MESSAGES);
+  const windowed = chatHistory.slice(start).map((m, i) => ({
+    idx: start + i,
+    role: m.role,
+    content: m.content || ''
+  }));
+
+  const texts = windowed.map(m => `[${m.role}] ${m.content}`);
+  let docEmbeddings: number[][] = [];
+  try {
+    docEmbeddings = await embeddings.embedDocuments(texts);
+  } catch (e) {
+    // Fallback: simple keyword scoring
+    const q = query.toLowerCase();
+    const scored = windowed.map(m => ({ m, score: (m.content.toLowerCase().includes(q) ? 1 : 0) + (m.role === 'user' ? 0.05 : 0) }));
+    return scored
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, k)
+      .map(s => ({ index: s.m.idx, role: s.m.role, content: s.m.content }));
+  }
+
+  const queryEmbedding = await embeddings.embedQuery(query);
+  const cosine = (a: number[], b: number[]) => {
+    const dot = a.reduce((sum, v, i) => sum + v * b[i], 0);
+    const magA = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+    const magB = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+    if (!magA || !magB) return 0;
+    return dot / (magA * magB);
+  };
+  const similarities = docEmbeddings.map((emb, i) => ({ i, sim: cosine(queryEmbedding, emb) }));
+  return similarities
+    .sort((a, b) => b.sim - a.sim)
+    .slice(0, k)
+    .filter(s => s.sim > 0.25)
+    .map(s => ({ index: windowed[s.i].idx, role: windowed[s.i].role as 'user'|'assistant', content: windowed[s.i].content }));
+}
+
 // Multi-query retrieval - generate multiple search queries for comprehensive results
 async function multiQueryRetrieval(
   vectorStore: InMemoryVectorStore,
@@ -184,6 +278,7 @@ async function multiQueryRetrieval(
 
   // Generate multiple search queries
   const queryGenerationPrompt = PromptTemplate.fromTemplate(`
+{system}
 You are an AI assistant helping to search through a book.
 Your goal is to find relevant passages efficiently by crafting diverse, high-yield search queries.
 
@@ -210,7 +305,7 @@ After producing the queries, internally reflect on whether these cover likely as
 
   callbacks?.onProgress?.("Generating search queries...");
 
-  const generatedQueries = await queryChain.invoke({ question: query });
+  const generatedQueries = await queryChain.invoke({ system: buildSystemInstructions(), question: query });
   const queries = generatedQueries.split('\n').filter(q => q.trim()).slice(0, 3);
   queries.unshift(query); // Include original query
 
@@ -274,7 +369,8 @@ async function chainOfThoughtReasoning(
   query: string,
   thoughts: ThoughtProcess[],
   toolUses: ToolUse[],
-  callbacks?: RAGCallbacks
+  callbacks?: RAGCallbacks,
+  chatSnippets: ChatSnippet[] = []
 ): Promise<string> {
   const reasoningThought: ThoughtProcess = {
     stage: "Reasoning",
@@ -285,15 +381,18 @@ async function chainOfThoughtReasoning(
   callbacks?.onThought?.(reasoningThought);
 
   const reasoningPrompt = PromptTemplate.fromTemplate(`
+{system}
 You are an AI assistant helping a user understand a book they are reading.
 
-Based on the following context from the book, provide a comprehensive answer to the user's question.
-Think step by step and consider multiple aspects of the question. Use the retrieved context carefully and avoid fabricating details.
+Use the retrieved context carefully and avoid fabricating details. Prefer book citations for facts; use chat history to maintain continuity with this conversation.
 
 IMPORTANT: Respond in the same language as the user's question. If the question is bilingual or mixed, use the primary language.
 
 Context from the book:
 {context}
+
+Relevant chat history (if any):
+{chat_context}
 
 Question: {question}
 
@@ -302,8 +401,9 @@ Instructions:
 2. Address each aspect using information from the context
 3. Synthesize the information into a coherent answer
 4. Include page citations in the format [p. X] or [pp. X-Y]
-5. If the context doesn't fully answer the question, explicitly state limitations
-6. Before finalizing, quickly self-check for contradictions or missing steps
+5. If you used chat history for continuity, mention it implicitly but do not fabricate citations
+6. If the context doesn't fully answer the question, explicitly state limitations
+7. Before finalizing, quickly self-check for contradictions or missing steps
 
 Answer:
 `);
@@ -326,6 +426,7 @@ Answer:
   const context = documents.map(doc =>
     `[Page ${doc.metadata.pageNumber}]: ${doc.pageContent}`
   ).join('\n\n');
+  const chat_context = (chatSnippets || []).map(s => `[#${s.index} ${s.role}]: ${s.content}`).join('\n\n');
 
   callbacks?.onProgress?.("Generating comprehensive answer...");
 
@@ -334,7 +435,7 @@ Answer:
   // Normalize to deltas to avoid duplicate appends in the UI.
   let answer = "";
   let accumulated = "";
-  const stream = await answerChain.stream({ context, question: query });
+  const stream = await answerChain.stream({ system: buildSystemInstructions(), context, chat_context, question: query });
   for await (const chunk of stream) {
     const next = typeof chunk === 'string' ? chunk : String(chunk);
     let delta = "";
@@ -377,7 +478,12 @@ Answer:
 }
 
 // Main RAG pipeline with enhanced features
-export async function generateAnswer(book: Book, query: string, callbacks?: RAGCallbacks): Promise<RAGResult> {
+export async function generateAnswer(
+  book: Book,
+  query: string,
+  callbacks?: RAGCallbacks,
+  options?: { chatHistory?: ChatMessage[]; threadId?: string }
+): Promise<RAGResult> {
   const thoughts: ThoughtProcess[] = [];
   const toolUses: ToolUse[] = [];
 
@@ -390,12 +496,53 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
   callbacks?.onThought?.(initThought);
 
   try {
-    // Get or create vector store
-    callbacks?.onProgress?.("Preparing vector database...");
-    const vectorStore = await getOrCreateVectorStore(book, callbacks);
+    // Decide which sources to use
+    const recentHistoryText = (options?.chatHistory || [])
+      .slice(Math.max(0, (options?.chatHistory || []).length - 10))
+      .map((m, i, arr) => `[${m.role}] ${m.content}`)
+      .join("\n");
 
-    // Multi-query retrieval
-    const relevantDocs = await multiQueryRetrieval(vectorStore, query, thoughts, toolUses, callbacks);
+    callbacks?.onProgress?.("Selecting tools for retrieval...");
+    const selection = await decideRetrievalSources(query, recentHistoryText);
+    const selectionTool: ToolUse = {
+      toolName: "Tool Selection",
+      input: { question: query },
+      output: selection,
+      timestamp: Date.now(),
+    };
+    toolUses.push(selectionTool);
+    callbacks?.onToolUse?.(selectionTool);
+
+    // Get or create vector store only if needed
+    let relevantDocs: Document[] = [];
+    if (selection.useBook) {
+      callbacks?.onProgress?.("Preparing vector database...");
+      const vectorStore = await getOrCreateVectorStore(book, callbacks);
+      relevantDocs = await multiQueryRetrieval(vectorStore, query, thoughts, toolUses, callbacks);
+    }
+
+    // Optionally search chat history
+    let chatSnippets: { index: number; role: 'user' | 'assistant'; content: string }[] = [];
+    if (selection.useChat && options?.chatHistory && options.chatHistory.length > 0) {
+      callbacks?.onProgress?.("Searching chat history for context...");
+      const chatTool: ToolUse = {
+        toolName: "Chat History Search",
+        input: { query, k: 5 },
+        timestamp: Date.now(),
+      };
+      toolUses.push(chatTool);
+      callbacks?.onToolUse?.(chatTool);
+      chatSnippets = await searchChatHistory(options.chatHistory, query, 5);
+      chatTool.output = { messagesFound: chatSnippets.length, indices: chatSnippets.map(s => s.index) };
+      callbacks?.onToolUse?.({ ...chatTool, output: chatTool.output });
+      const chatThought: ThoughtProcess = {
+        stage: "Chat Context",
+        thought: chatSnippets.length > 0 ? `Found ${chatSnippets.length} relevant chat snippets for continuity` : `No strongly relevant chat history found`,
+        timestamp: Date.now(),
+      };
+      thoughts.push(chatThought);
+      callbacks?.onThought?.(chatThought);
+    }
 
     // Post-retrieval reflection (think after tool use)
     const retrievalReflection: ThoughtProcess = {
@@ -406,10 +553,10 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
     thoughts.push(retrievalReflection);
     callbacks?.onThought?.(retrievalReflection);
 
-    if (relevantDocs.length === 0) {
+    if (relevantDocs.length === 0 && (!chatSnippets || chatSnippets.length === 0)) {
       const noResultsThought: ThoughtProcess = {
         stage: "No Results",
-        thought: "No relevant passages found in the book for this query",
+        thought: "No relevant passages found in the book or chat history for this query",
         timestamp: Date.now()
       };
       thoughts.push(noResultsThought);
@@ -419,12 +566,13 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
         answer: "I couldn't find relevant information in the book to answer your question. The topic might not be covered in this text, or it might be phrased differently.",
         toolUses,
         thoughts,
-        relevantChunks: []
+        relevantChunks: [],
+        relevantChatMessages: []
       };
     }
 
     // Generate answer with chain of thought
-    const answer = await chainOfThoughtReasoning(relevantDocs, query, thoughts, toolUses, callbacks);
+    const answer = await chainOfThoughtReasoning(relevantDocs, query, thoughts, toolUses, callbacks, chatSnippets);
 
     // Convert documents back to chunks for compatibility
     const relevantChunks: Chunk[] = relevantDocs.map(doc => ({
@@ -447,7 +595,8 @@ export async function generateAnswer(book: Book, query: string, callbacks?: RAGC
       answer,
       toolUses,
       thoughts,
-      relevantChunks
+      relevantChunks,
+      relevantChatMessages: chatSnippets
     };
 
   } catch (error) {
