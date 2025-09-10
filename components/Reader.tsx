@@ -44,6 +44,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const [activeThreadId, setActiveThreadId] = useState<string>('');
   const [threadStates, setThreadStates] = useState<Record<string, ThreadEphemeralState>>({});
   const [currentPage, setCurrentPage] = useState<number | null>(null);
+  const [targetPosition, setTargetPosition] = useState<{ page: number; yPercent?: number } | null>(null);
   // Per-thread ephemeral state is tracked in threadStates
   const viewerRef = useRef<HTMLDivElement>(null);
   const chatPanelRef = useRef<HTMLDivElement>(null);
@@ -398,8 +399,11 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   //   };
   // }, [webViewerInstance]);
 
-  const handleNavigateToPage = (page: number) => {
+  const handleNavigateToPage = (page: number, yPercent?: number) => {
     setCurrentPage(page);
+    setTargetPosition({ page, yPercent });
+    // Clear target after a short delay to avoid stale repeats
+    setTimeout(() => setTargetPosition(null), 500);
   };
 
   const handleSendMessage = async (message: string) => {
@@ -978,6 +982,8 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             currentPage={currentPage}
             onPageChange={(p) => setCurrentPage(p)}
             initialScale={'page-fit'}
+            // Navigate to target position when provided (from chat links)
+            targetPosition={targetPosition || undefined}
           />
         </div>
         {/* Fallback floating chat button inside the viewer container */}

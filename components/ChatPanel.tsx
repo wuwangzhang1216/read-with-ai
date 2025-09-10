@@ -14,7 +14,7 @@ interface ChatPanelProps {
   isAiThinking: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
-  onNavigateToPage: (page: number) => void;
+  onNavigateToPage: (page: number, yPercent?: number) => void;
 }
 
 const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -129,10 +129,15 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
                 className={`max-w-md px-4 py-3 rounded-lg ${msg.role === 'user' ? 'bg-blue-500 text-white' : ''}`}
                 style={msg.role === 'assistant' ? {backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)'} : {}}
               >
-                {msg.role === 'user'
-                 ? <div className="whitespace-pre-wrap">{msg.content}</div>
-                 : <MarkdownMessage content={msg.content} className="prose-light max-w-none" />
-                }
+                {msg.role === 'user' ? (
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                ) : (
+                  <MarkdownMessage
+                    content={msg.content}
+                    className="prose-light max-w-none"
+                    onNavigatePage={(p, y) => onNavigateToPage(p, y)}
+                  />
+                )}
               </div>
             </AnimatedMessage>
           ))}

@@ -21,7 +21,7 @@ interface EnhancedChatPanelProps {
   hasStreamStarted?: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
-  onNavigateToPage: (page: number) => void;
+  onNavigateToPage: (page: number, yPercent?: number) => void;
   currentThoughts?: ThoughtProcess[];
   currentToolUses?: ToolUse[];
   messageReceived?: boolean;
@@ -96,7 +96,7 @@ const ThinkingIndicator: React.FC<{
 
 const MessageWithProcess: React.FC<{
   message: EnhancedChatMessage,
-  onNavigateToPage: (page: number) => void
+  onNavigateToPage: (page: number, yPercent?: number) => void
 }> = ({ message, onNavigateToPage }) => {
   const [showProcess, setShowProcess] = useState(false);
 
@@ -122,7 +122,10 @@ const MessageWithProcess: React.FC<{
       )}
 
       <div className="prose-light max-w-none">
-        <MarkdownMessage content={message.content} />
+        <MarkdownMessage
+          content={message.content}
+          onNavigatePage={(p, y) => onNavigateToPage(p, y)}
+        />
       </div>
     </div>
   );

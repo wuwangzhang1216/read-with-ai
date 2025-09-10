@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -14,22 +14,35 @@ interface PdfJsViewerProps {
   currentPage?: number | null;
   onPageChange?: (page: number) => void;
   initialScale?: number | 'auto' | 'page-fit' | 'page-width';
+  targetPosition?: { page: number; yPercent?: number };
 }
 
-const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPage, onPageChange, initialScale = 'page-fit' }) => {
+const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPage, onPageChange, initialScale = 'page-fit', targetPosition }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [numPages, setNumPages] = useState(0);
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(1);
   const [fitMode, setFitMode] = useState<'width' | 'page'>(() => (initialScale === 'page-fit' ? 'page' : 'width'));
-  const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-  const onPageChangeRef = useRef<typeof onPageChange>();
+  const onPageChangeRef = useRef<typeof onPageChange>(undefined);
   const containerSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
   const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const pendingScrollToRef = useRef<{ page: number; tries: number } | null>(null);
-  // Until this timestamp, ignore scroll-driven page detection
-  const programmaticScrollUntilRef = useRef<number>(0);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const pendingYPercentRef = useRef<number | null>(null);
+
+  const scrollToYPercent = (y: number) => {
+    const sc = scrollContainerRef.current;
+    if (!sc) return;
+    const pageEl = sc.querySelector('.react-pdf__page') as HTMLElement | null;
+    if (!pageEl) return;
+    const stickyH = (toolbarRef.current?.offsetHeight || 0) + 12;
+    const scRect = sc.getBoundingClientRect();
+    const pageRect = pageEl.getBoundingClientRect();
+    const topBase = sc.scrollTop + (pageRect.top - scRect.top) - stickyH;
+    const targetTop = topBase + y * pageRect.height;
+    const maxTop = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const clamped = Math.max(0, Math.min(maxTop, targetTop));
+    sc.scrollTo({ top: clamped, behavior: 'auto' });
+  };
 
   // No-op: worker is configured at module load above
 
@@ -62,46 +75,35 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
     return () => ro.disconnect();
   }, []);
 
-  // Helper: scroll to a given page, queueing retries if layout/refs not ready
-  const tryScrollToPage = useCallback((targetPage: number, smooth: boolean) => {
-    const sc = scrollContainerRef.current;
-    const el = pageRefs.current.get(targetPage);
-    const ready = !!(sc && el && containerSize.width && containerSize.height);
-    if (!ready) {
-      pendingScrollToRef.current = { page: targetPage, tries: (pendingScrollToRef.current?.tries || 0) + 1 };
-      // Schedule a retry on next frame
-      requestAnimationFrame(() => {
-        if (pendingScrollToRef.current) {
-          tryScrollToPage(pendingScrollToRef.current.page, smooth);
-        }
-      });
-      return false;
-    }
-    // We are ready, clear pending flag
-    pendingScrollToRef.current = null;
-    // Compute target top relative to the scroll container, accounting for sticky toolbar height
-    const elTop = el.getBoundingClientRect().top;
-    const scTop = sc!.getBoundingClientRect().top;
-    const stickyH = (toolbarRef.current?.offsetHeight || 0) + 12; // 12px top gap
-    const top = sc!.scrollTop + (elTop - scTop) - stickyH;
-    programmaticScrollUntilRef.current = Date.now() + 600; // ignore scroll-driven updates for a short while
-    sc!.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
-    return true;
-  }, [containerSize.width, containerSize.height]);
-
   // Handle external navigation requests
   useEffect(() => {
     if (!currentPage) return;
     setPage(currentPage);
-    tryScrollToPage(currentPage, true);
-  }, [currentPage, tryScrollToPage]);
+    // In single-page mode, just reset scroll to top on navigation
+    try { scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+  }, [currentPage]);
 
-  // If a scroll was queued because layout/refs weren't ready, try again
+  // Handle target position navigation with optional y offset
   useEffect(() => {
-    if (pendingScrollToRef.current) {
-      tryScrollToPage(pendingScrollToRef.current.page, true);
+    if (!targetPosition) return;
+    const { page: p, yPercent } = targetPosition;
+    if (typeof p === 'number' && p > 0) {
+      setPage(p);
+      // Normalize yPercent to 0..1
+      let yNorm: number | null = null;
+      if (typeof yPercent === 'number') {
+        yNorm = yPercent > 1 ? Math.max(0, Math.min(1, yPercent / 100)) : Math.max(0, Math.min(1, yPercent));
+      }
+      pendingYPercentRef.current = yNorm;
+      try { scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
+      // If the requested page is already rendered, attempt immediate scroll
+      if (yNorm !== null) {
+        requestAnimationFrame(() => {
+          try { scrollToYPercent(yNorm!); } catch {}
+        });
+      }
     }
-  }, [numPages, containerSize.width, containerSize.height, tryScrollToPage]);
+  }, [targetPosition?.page, targetPosition?.yPercent]);
 
   // When page changes internally, notify parent
   useEffect(() => {
@@ -109,37 +111,7 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
     if (cb) cb(page);
   }, [page]);
 
-  // Scroll handler to update current page based on visibility
-  useEffect(() => {
-    const sc = scrollContainerRef.current;
-    if (!sc) return;
-    let ticking = false;
-    const onScroll = () => {
-      if (ticking) return;
-      ticking = true;
-      requestAnimationFrame(() => {
-        ticking = false;
-        try {
-          if (Date.now() < programmaticScrollUntilRef.current) return; // ignore programmatic scrolls
-          const containerTop = sc.scrollTop;
-          const containerH = sc.clientHeight;
-          let bestPage = 1;
-          let bestDist = Infinity;
-          pageRefs.current.forEach((node, p) => {
-            const top = sc.scrollTop + (node.getBoundingClientRect().top - sc.getBoundingClientRect().top);
-            const centerDist = Math.abs((top - containerTop) - containerH / 4);
-            if (centerDist < bestDist) {
-              bestDist = centerDist;
-              bestPage = p;
-            }
-          });
-          setPage(prev => (prev !== bestPage ? bestPage : prev));
-        } catch {}
-      });
-    };
-    sc.addEventListener('scroll', onScroll, { passive: true });
-    return () => sc.removeEventListener('scroll', onScroll);
-  }, [numPages]);
+  // Removed scroll-driven page detection: single-page mode only
 
   const zoomStep = 0.1;
   const zoomIn = () => setZoom(z => Math.min(Number((z + zoomStep).toFixed(2)), 3));
@@ -148,20 +120,10 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
   const goToPage = (n: number) => {
     const clamped = Math.max(1, Math.min(numPages || 1, Math.floor(n)));
     setPage(clamped);
-    tryScrollToPage(clamped, true);
+    // Reset scroll position to top for new page
+    try { scrollContainerRef.current?.scrollTo({ top: 0, behavior: 'auto' }); } catch {}
   };
-
-  const registerPageRef = useCallback((p: number) => (el: HTMLDivElement | null) => {
-    if (!el) {
-      pageRefs.current.delete(p);
-    } else {
-      pageRefs.current.set(p, el);
-    }
-    // If there's a pending scroll to this page, try again now that ref is set
-    if (pendingScrollToRef.current && pendingScrollToRef.current.page === p) {
-      tryScrollToPage(p, true);
-    }
-  }, [tryScrollToPage]);
+  // No per-page refs needed in single-page mode
 
   // Compute width/height props for Page based on fit mode
   const pageRenderProps = useMemo(() => {
@@ -269,19 +231,22 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
           loading={<div style={{ color: 'var(--text-secondary)' }}>Loading PDF…</div>}
           error={<div style={{ color: 'var(--accent-red)' }}>Failed to load PDF.</div>}
         >
-          {Array.from(new Array(numPages), (_, i) => i + 1).map((p) => (
-            <div key={p} ref={registerPageRef(p)} style={{ margin: '8px 0' }}>
-              <Page
-                pageNumber={p}
-                renderTextLayer
-                renderAnnotationLayer
-                className="react-pdf__page"
-                loading={<div style={{ color: 'var(--text-secondary)' }}>Rendering page {p}…</div>}
-                onRenderError={(err) => console.error(`Failed to render page ${p}:`, err)}
-                {...pageRenderProps}
-              />
-            </div>
-          ))}
+          <div key={page} style={{ margin: '8px 0' }}>
+            <Page
+              pageNumber={page}
+              renderTextLayer
+              renderAnnotationLayer
+              className="react-pdf__page"
+              loading={<div style={{ color: 'var(--text-secondary)' }}>Rendering page {page}…</div>}
+              onRenderError={(err) => console.error(`Failed to render page ${page}:`, err)}
+              onRenderSuccess={() => {
+                const y = pendingYPercentRef.current;
+                if (y === null || typeof y === 'undefined') return;
+                try { scrollToYPercent(y); } finally { pendingYPercentRef.current = null; }
+              }}
+              {...pageRenderProps}
+            />
+          </div>
         </Document>
         )}
       </div>
