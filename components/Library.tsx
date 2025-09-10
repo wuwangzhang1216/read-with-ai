@@ -4,9 +4,11 @@ import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
 import * as enhancedRagService from '../services/enhancedRagService';
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
-// Use the same worker wiring as the viewer to avoid version mismatch
-// @ts-ignore - Vite worker URL import
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&url';
+// Configure pdf.js worker once at module load
+try {
+  // @ts-ignore
+  GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+} catch {}
 
 interface LibraryProps {
   books: Book[];
@@ -32,9 +34,7 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
       setProcessingStatus('Reading file...');
       const fileBuffer = await file.arrayBuffer();
 
-      // Align worker version with bundled API version
-      // @ts-ignore
-      GlobalWorkerOptions.workerSrc = pdfjsWorker;
+      // Worker is already configured at module scope
       // Slice to pass a copy, preserving the original buffer used by the viewer
       const pdf = await getDocument({ data: fileBuffer.slice(0) }).promise;
       

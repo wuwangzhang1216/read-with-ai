@@ -1,13 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import 'pdfjs-dist/web/pdf_viewer.css';
-
-// PDF.js core and viewer imports
-import { getDocument, GlobalWorkerOptions, type PDFDocumentProxy } from 'pdfjs-dist';
-// Vite worker URL for PDF.js worker
-// @ts-ignore - Vite query suffix types
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker&url';
-// @ts-ignore - pdfjs viewer types are not exported with typings
-import { EventBus, PDFLinkService, PDFViewer } from 'pdfjs-dist/web/pdf_viewer';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+// Configure worker using a URL string tied to installed pdfjs-dist
+try {
+  // @ts-ignore: workerSrc expects a string URL
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.mjs', import.meta.url).toString();
+} catch {}
 
 interface PdfJsViewerProps {
   fileBuffer: ArrayBuffer;
@@ -18,155 +17,171 @@ interface PdfJsViewerProps {
 }
 
 const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPage, onPageChange, initialScale = 'page-fit' }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<HTMLDivElement>(null);
-  const pdfViewerRef = useRef<any>(null);
-  const eventBusRef = useRef<any>(null);
-  const linkServiceRef = useRef<any>(null);
-  const pdfDocRef = useRef<PDFDocumentProxy | null>(null);
-  const [scale, setScale] = useState<number>(1);
-  const [page, setPage] = useState<number>(1);
-  const [pageCount, setPageCount] = useState<number>(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [numPages, setNumPages] = useState(0);
+  const [page, setPage] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [fitMode, setFitMode] = useState<'width' | 'page'>(() => (initialScale === 'page-fit' ? 'page' : 'width'));
+  const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const onPageChangeRef = useRef<typeof onPageChange>();
+  const containerSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const pendingScrollToRef = useRef<{ page: number; tries: number } | null>(null);
+  // Until this timestamp, ignore scroll-driven page detection
+  const programmaticScrollUntilRef = useRef<number>(0);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+
+  // No-op: worker is configured at module load above
 
   useEffect(() => {
     onPageChangeRef.current = onPageChange;
   }, [onPageChange]);
 
+  // Track container size for fit calculations
   useEffect(() => {
-    // Configure worker (via URL so PDF.js can spawn it itself)
-    try {
-      // @ts-ignore: workerSrc expects a string URL
-      GlobalWorkerOptions.workerSrc = pdfjsWorker;
-    } catch {}
-
-    const container = containerRef.current!;
-    const viewer = viewerRef.current!;
-
-    const eventBus = new EventBus();
-    const linkService = new PDFLinkService({ eventBus });
-    const pdfViewer = new PDFViewer({
-      container,
-      viewer,
-      eventBus,
-      linkService,
-      // Enable text layer for selectable text
-      textLayerMode: 2,
-      enablePrintAutoRotate: true,
-    });
-    linkService.setViewer(pdfViewer);
-
-    eventBus.on('pagesinit', () => {
-      // Set a more comfortable initial scale (fit the whole page by default)
-      try { (pdfViewer as any).currentScaleValue = initialScale; } catch {}
-      try { setScale((pdfViewer as any).currentScale || 1); } catch {}
-    });
-    eventBus.on('pagechanging', (evt: any) => {
-      const cb = onPageChangeRef.current;
-      if (cb && typeof evt?.pageNumber === 'number') {
-        cb(evt.pageNumber);
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const apply = (w: number, h: number) => {
+      if (w !== containerSizeRef.current.width || h !== containerSizeRef.current.height) {
+        containerSizeRef.current = { width: w, height: h };
+        setContainerSize({ width: w, height: h });
       }
-      if (typeof evt?.pageNumber === 'number') {
-        setPage(evt.pageNumber);
+    };
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const cr = entry.contentRect;
+        apply(cr.width, cr.height);
       }
     });
-    // Track scale changes if the viewer dispatches them
-    eventBus.on?.('scalechanging' as any, (evt: any) => {
-      if (typeof evt?.scale === 'number') setScale(evt.scale);
-      else try { setScale((pdfViewer as any).currentScale || 1); } catch {}
+    ro.observe(el);
+    // Initialize once on next frame to wait for layout
+    requestAnimationFrame(() => {
+      const rect = el.getBoundingClientRect();
+      apply(rect.width, rect.height);
     });
+    return () => ro.disconnect();
+  }, []);
 
-    pdfViewerRef.current = pdfViewer;
-    eventBusRef.current = eventBus;
-    linkServiceRef.current = linkService;
-
-    // Load the document from ArrayBuffer
-    // Clone the ArrayBuffer so React StrictMode + worker transfer won't detach the original
-    let data: Uint8Array | null = null;
-    try {
-      const src = new Uint8Array(fileBuffer); // views are okay; we copy next
-      data = new Uint8Array(src.byteLength);
-      data.set(src);
-    } catch (e) {
-      console.error('Unable to clone PDF ArrayBuffer:', e);
-      return () => {};
+  // Helper: scroll to a given page, queueing retries if layout/refs not ready
+  const tryScrollToPage = useCallback((targetPage: number, smooth: boolean) => {
+    const sc = scrollContainerRef.current;
+    const el = pageRefs.current.get(targetPage);
+    const ready = !!(sc && el && containerSize.width && containerSize.height);
+    if (!ready) {
+      pendingScrollToRef.current = { page: targetPage, tries: (pendingScrollToRef.current?.tries || 0) + 1 };
+      // Schedule a retry on next frame
+      requestAnimationFrame(() => {
+        if (pendingScrollToRef.current) {
+          tryScrollToPage(pendingScrollToRef.current.page, smooth);
+        }
+      });
+      return false;
     }
+    // We are ready, clear pending flag
+    pendingScrollToRef.current = null;
+    // Compute target top relative to the scroll container, accounting for sticky toolbar height
+    const elTop = el.getBoundingClientRect().top;
+    const scTop = sc!.getBoundingClientRect().top;
+    const stickyH = (toolbarRef.current?.offsetHeight || 0) + 12; // 12px top gap
+    const top = sc!.scrollTop + (elTop - scTop) - stickyH;
+    programmaticScrollUntilRef.current = Date.now() + 600; // ignore scroll-driven updates for a short while
+    sc!.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' });
+    return true;
+  }, [containerSize.width, containerSize.height]);
 
-    let destroyed = false;
-    const loadingTask = getDocument({ data });
-    loadingTask.promise.then((pdf) => {
-      if (destroyed) return;
-      pdfDocRef.current = pdf;
-      pdfViewer.setDocument(pdf);
-      linkService.setDocument(pdf);
-      try { setPageCount(pdf.numPages || 0); } catch {}
-    }).catch((err) => {
-      // Suppress noise when we explicitly destroyed during StrictMode double-invoke
-      if (destroyed && /Worker was destroyed|terminated/i.test(String(err?.message || err))) {
-        return;
-      }
-      console.error('Failed to load PDF with pdf.js:', err);
-    });
-
-    const handleResize = () => {
-      // Notify viewer on container resize
-      try { (eventBus as any).dispatch('resize', {}); } catch {}
-    };
-    window.addEventListener('resize', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      destroyed = true;
-      try { loadingTask.destroy(); } catch {}
-      try { pdfViewer.cleanup(); } catch {}
-      try { pdfViewer.setDocument(null); } catch {}
-      pdfDocRef.current = null;
-    };
-  }, [fileBuffer, initialScale]);
-
-  // Respond to external page navigation requests
+  // Handle external navigation requests
   useEffect(() => {
-    if (!currentPage || !pdfViewerRef.current) return;
-    try {
-      (pdfViewerRef.current as any).currentPageNumber = currentPage;
-    } catch {}
-  }, [currentPage]);
+    if (!currentPage) return;
+    setPage(currentPage);
+    tryScrollToPage(currentPage, true);
+  }, [currentPage, tryScrollToPage]);
 
-  // Text selection helper: expose selected text via CustomEvent for parent if needed
-  // We keep selection handling in the parent (Reader) since it manages the popup.
+  // If a scroll was queued because layout/refs weren't ready, try again
+  useEffect(() => {
+    if (pendingScrollToRef.current) {
+      tryScrollToPage(pendingScrollToRef.current.page, true);
+    }
+  }, [numPages, containerSize.width, containerSize.height, tryScrollToPage]);
 
-  // Toolbar actions
-  const applyScale = (value: number | 'page-fit' | 'page-width' | 'auto') => {
-    const v = pdfViewerRef.current as any;
-    if (!v) return;
-    try {
-      (v as any).currentScaleValue = value as any;
-      setScale((v as any).currentScale || (typeof value === 'number' ? value : 1));
-    } catch {}
-  };
+  // When page changes internally, notify parent
+  useEffect(() => {
+    const cb = onPageChangeRef.current;
+    if (cb) cb(page);
+  }, [page]);
+
+  // Scroll handler to update current page based on visibility
+  useEffect(() => {
+    const sc = scrollContainerRef.current;
+    if (!sc) return;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        try {
+          if (Date.now() < programmaticScrollUntilRef.current) return; // ignore programmatic scrolls
+          const containerTop = sc.scrollTop;
+          const containerH = sc.clientHeight;
+          let bestPage = 1;
+          let bestDist = Infinity;
+          pageRefs.current.forEach((node, p) => {
+            const top = sc.scrollTop + (node.getBoundingClientRect().top - sc.getBoundingClientRect().top);
+            const centerDist = Math.abs((top - containerTop) - containerH / 4);
+            if (centerDist < bestDist) {
+              bestDist = centerDist;
+              bestPage = p;
+            }
+          });
+          setPage(prev => (prev !== bestPage ? bestPage : prev));
+        } catch {}
+      });
+    };
+    sc.addEventListener('scroll', onScroll, { passive: true });
+    return () => sc.removeEventListener('scroll', onScroll);
+  }, [numPages]);
+
   const zoomStep = 0.1;
-  const zoomIn = () => {
-    const v = pdfViewerRef.current as any;
-    if (!v) return;
-    const next = Math.min((v.currentScale || scale) + zoomStep, 3);
-    applyScale(Number(next.toFixed(2)));
+  const zoomIn = () => setZoom(z => Math.min(Number((z + zoomStep).toFixed(2)), 3));
+  const zoomOut = () => setZoom(z => Math.max(Number((z - zoomStep).toFixed(2)), 0.25));
+  const applyFit = (mode: 'width' | 'page') => setFitMode(mode);
+  const goToPage = (n: number) => {
+    const clamped = Math.max(1, Math.min(numPages || 1, Math.floor(n)));
+    setPage(clamped);
+    tryScrollToPage(clamped, true);
   };
-  const zoomOut = () => {
-    const v = pdfViewerRef.current as any;
-    if (!v) return;
-    const next = Math.max((v.currentScale || scale) - zoomStep, 0.25);
-    applyScale(Number(next.toFixed(2)));
-  };
-  const goToPage = (num: number) => {
-    const v = pdfViewerRef.current as any;
-    if (!v) return;
-    const clamped = Math.max(1, Math.min(pageCount || 1, Math.floor(num)));
-    try { v.currentPageNumber = clamped; setPage(clamped); } catch {}
-  };
+
+  const registerPageRef = useCallback((p: number) => (el: HTMLDivElement | null) => {
+    if (!el) {
+      pageRefs.current.delete(p);
+    } else {
+      pageRefs.current.set(p, el);
+    }
+    // If there's a pending scroll to this page, try again now that ref is set
+    if (pendingScrollToRef.current && pendingScrollToRef.current.page === p) {
+      tryScrollToPage(p, true);
+    }
+  }, [tryScrollToPage]);
+
+  // Compute width/height props for Page based on fit mode
+  const pageRenderProps = useMemo(() => {
+    const { width, height } = containerSize;
+    if (fitMode === 'page') {
+      // Fit whole page height; apply zoom as a multiplier via scale
+      const target = Math.max(200, height - 120); // leave room for toolbar
+      return { height: Math.floor(target), scale: zoom } as const;
+    }
+    // Fit width (default)
+    const target = Math.max(320, Math.floor(width - 32));
+    return { width: target, scale: zoom } as const;
+  }, [fitMode, zoom, containerSize.width, containerSize.height]);
+
+  // Stable file/options to prevent unnecessary reloads
+  const fileSource = useMemo(() => ({ data: fileBuffer }), [fileBuffer]);
 
   return (
     <div
-      ref={containerRef}
+      ref={scrollContainerRef}
       className="pdfViewerContainer"
       style={{
         position: 'absolute',
@@ -175,7 +190,6 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
         backgroundColor: 'var(--bg-secondary)'
       }}
     >
-      {/* Elegant compact toolbar */}
       <div
         style={{
           position: 'sticky',
@@ -199,19 +213,19 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
           }}
         >
           <button onClick={zoomOut} title="Zoom out" style={{ padding: '4px 8px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
-            −
+            –
           </button>
-          <span style={{ minWidth: 48, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{Math.round((scale || 1) * 100)}%</span>
+          <span style={{ minWidth: 48, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{Math.round((zoom || 1) * 100)}%</span>
           <button onClick={zoomIn} title="Zoom in" style={{ padding: '4px 8px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
             +
           </button>
 
           <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.12)', margin: '0 6px' }} />
 
-          <button onClick={() => applyScale('page-fit')} title="Fit page" style={{ padding: '4px 10px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
+          <button onClick={() => applyFit('page')} title="Fit page" style={{ padding: '4px 10px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
             Fit
           </button>
-          <button onClick={() => applyScale('page-width')} title="Fit width" style={{ padding: '4px 10px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
+          <button onClick={() => applyFit('width')} title="Fit width" style={{ padding: '4px 10px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
             Width
           </button>
 
@@ -236,14 +250,40 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
             title="Page number"
             style={{ width: 40, textAlign: 'center', borderRadius: 6, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.1)', color: 'inherit', padding: '2px 4px' }}
           />
-          <span style={{ opacity: 0.85 }}>/ {pageCount || 0}</span>
+          <span style={{ opacity: 0.85 }}>/ {numPages || 0}</span>
           <button onClick={() => goToPage((page || 1) + 1)} title="Next page" style={{ padding: '4px 8px', borderRadius: 8, background: 'transparent', color: 'inherit', border: '1px solid rgba(255,255,255,0.15)' }}>
             ›
           </button>
         </div>
       </div>
 
-      <div ref={viewerRef} className="pdfViewer" style={{ position: 'relative' }} aria-label={title || 'PDF Document'} />
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0 40px 0' }} aria-label={title || 'PDF Document'}>
+        {!containerSize.width || !containerSize.height ? (
+          <div style={{ color: 'var(--text-secondary)', padding: '24px' }}>Preparing viewer…</div>
+        ) : (
+        <Document
+          file={fileSource}
+          onLoadSuccess={(info) => setNumPages(info.numPages || 0)}
+          onLoadError={(err) => console.error('Failed to load PDF with react-pdf:', err)}
+          loading={<div style={{ color: 'var(--text-secondary)' }}>Loading PDF…</div>}
+          error={<div style={{ color: 'var(--accent-red)' }}>Failed to load PDF.</div>}
+        >
+          {Array.from(new Array(numPages), (_, i) => i + 1).map((p) => (
+            <div key={p} ref={registerPageRef(p)} style={{ margin: '8px 0' }}>
+              <Page
+                pageNumber={p}
+                renderTextLayer
+                renderAnnotationLayer
+                className="react-pdf__page"
+                loading={<div style={{ color: 'var(--text-secondary)' }}>Rendering page {p}…</div>}
+                onRenderError={(err) => console.error(`Failed to render page ${p}:`, err)}
+                {...pageRenderProps}
+              />
+            </div>
+          ))}
+        </Document>
+        )}
+      </div>
     </div>
   );
 };
