@@ -434,6 +434,11 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
       }
     }));
 
+    // Nudge UI to bottom when thinking starts (extra safety)
+    try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
+
+    // Note: Scrolling is now handled automatically by EnhancedChatPanel when new messages are added
+
     try {
       // Use enhanced RAG service with real-time callbacks
       const result = await enhancedRagService.generateAnswer(book, message, {
@@ -508,6 +513,12 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                 }
                 return { ...t, messages: msgs };
               }));
+
+              // Ask panel to ensure bottom (extra safety during stream)
+              try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
+
+              // Note: Scrolling during streaming is now handled automatically by EnhancedChatPanel
+
               return prev;
             }
             if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
@@ -531,6 +542,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                         }
                         return { ...t, messages: msgs };
                       }));
+                      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
                     }
                     return {
                       ...prev2,
@@ -567,6 +579,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
               }
               return { ...t, messages: msgs };
             }));
+            try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
             return {
               ...prev,
               [threadId]: {
@@ -635,7 +648,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const handleResendEdited = async (newMessage: string) => {
     if (!activeThread) return;
     const threadId = activeThread.id;
-    const editIndex = activeState.editingIndex ?? -1;
+      const editIndex = activeState.editingIndex ?? -1;
     if (editIndex < 0) return;
 
     // Replace the target user message and trim conversation after it
@@ -748,6 +761,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                 }
                 return { ...t, messages: msgs };
               }));
+              try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
               return prev;
             }
             if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
@@ -771,6 +785,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                         }
                         return { ...t, messages: msgs };
                       }));
+                      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
                     }
                     return {
                       ...prev2,
@@ -806,6 +821,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
               }
               return { ...t, messages: msgs };
             }));
+            try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
             return {
               ...prev,
               [threadId]: {

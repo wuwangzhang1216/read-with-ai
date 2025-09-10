@@ -11,9 +11,14 @@ const AnimatedMessage: React.FC<AnimatedMessageProps> = ({
   delay = 0,
   className = ''
 }) => {
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible, setIsVisible] = useState(delay === 0);
 
   useEffect(() => {
+    if (delay === 0) {
+      setIsVisible(true);
+      return;
+    }
+
     const timer = setTimeout(() => {
       setIsVisible(true);
     }, delay);
@@ -26,7 +31,9 @@ const AnimatedMessage: React.FC<AnimatedMessageProps> = ({
       className={`animated-message ${isVisible ? 'animate-in' : 'animate-out'} ${className}`}
       style={{
         animation: isVisible
-          ? `slideInFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms both`
+          ? delay === 0
+            ? 'slideInFade 0.3s cubic-bezier(0.16, 1, 0.3, 1) both'
+            : `slideInFade 0.4s cubic-bezier(0.16, 1, 0.3, 1) ${delay}ms both`
           : 'none'
       }}
     >

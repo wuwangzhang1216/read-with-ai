@@ -130,7 +130,7 @@ const MarkdownMessage: React.FC<MarkdownMessageProps> = ({
             if (isLikelyInline) {
               return (
                 <code
-                  className="bg-[rgba(44,62,80,0.08)] px-1.5 py-1 rounded-md text-sm font-mono text-[var(--text-primary)] border border-transparent mx-0.5"
+                  className="bg-[rgba(248,250,252,0.95)] px-1.5 py-1 rounded-md text-sm font-mono text-[#1e293b] border border-[rgba(44,62,80,0.2)] mx-0.5 shadow-sm"
                   {...restProps}
                 >
                   {codeContent}

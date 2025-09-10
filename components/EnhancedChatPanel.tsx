@@ -155,30 +155,137 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
-  const [autoStickToBottom, setAutoStickToBottom] = useState(true);
+  const [autoStickToBottom, setAutoStickToBottom] = useState(false);
   const programmaticScrollUntilRef = useRef<number>(0);
-  const wasAtBottomRef = useRef<boolean>(true);
+  const wasAtBottomRef = useRef<boolean>(false);
   const lastLenRef = useRef<number>(0);
+  const lastScrollTimeRef = useRef<number>(0);
+  const [hasInitialized, setHasInitialized] = useState(false);
+  // Track length of currently streaming assistant message to detect token appends
+  const streamingContentLen = React.useMemo(() => {
+    const last = chatHistory[chatHistory.length - 1];
+    if (last && last.role === 'assistant' && typeof last.content === 'string') {
+      return last.content.length;
+    }
+    return 0;
+  }, [chatHistory]);
 
-  const scrollToBottom = (smooth: boolean) => {
-    programmaticScrollUntilRef.current = Date.now() + 500; // ignore scroll events briefly
-    endOfMessagesRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+  const scrollToBottom = (smooth: boolean = false, force: boolean = false) => {
+    const el = chatContainerRef.current;
+    if (!el) return;
+
+    // Skip if user has scrolled up and we're not forcing
+    if (!force && !autoStickToBottom) return;
+
+    // Check if already at bottom (within 20px threshold)
+    const threshold = 20;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+
+    // Only scroll if not already at bottom or if forced
+    if (!atBottom || force) {
+      programmaticScrollUntilRef.current = Date.now() + 500; // ignore scroll events briefly
+      // Primary: scroll sentinel into view within container
+      endOfMessagesRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+      // Fallback: directly set container scroll position next frame
+      requestAnimationFrame(() => {
+        try {
+          el.scrollTop = el.scrollHeight;
+        } catch {}
+      });
+    }
   };
 
   useEffect(() => {
     if (isOpen) {
       inputRef.current?.focus();
+      // Reset initialization state when panel opens or thread changes
+      setHasInitialized(false);
     }
+  }, [isOpen, activeThreadId]);
+
+  // After user sends a message and AI starts thinking, make sure the
+  // thinking indicator at the bottom is visible and enable stickiness
+  useEffect(() => {
+    if (!isOpen) return;
+    if (isAiThinking && !hasStreamStarted) {
+      scrollToBottom(false, true);
+      setAutoStickToBottom(true);
+    }
+  }, [isAiThinking, hasStreamStarted, isOpen]);
+
+  // Listen for streaming scroll events from Reader component
+  useEffect(() => {
+    const handleStreamScroll = () => {
+      if (isOpen) {
+        scrollToBottom(false, true); // Force scroll when explicitly requested
+      }
+    };
+
+    window.addEventListener('streamScrollToBottom', handleStreamScroll);
+    return () => window.removeEventListener('streamScrollToBottom', handleStreamScroll);
   }, [isOpen]);
+
+  // When streaming starts, enable auto-stick-to-bottom if user is at bottom
+  useEffect(() => {
+    if (hasStreamStarted && isOpen) {
+      const el = chatContainerRef.current;
+      if (el) {
+        const threshold = 20;
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+        if (atBottom) {
+          setAutoStickToBottom(true);
+          wasAtBottomRef.current = true;
+        }
+      }
+    }
+  }, [hasStreamStarted, isOpen]);
+
+  // Handle initial loading and delayed scroll to bottom
+  useEffect(() => {
+    if (!isOpen || hasInitialized) return;
+
+    // If there are chat messages, wait for them to render, then scroll to bottom
+    if (chatHistory.length > 0) {
+      // Wait for content to render, then smoothly scroll to bottom
+      const timer = setTimeout(() => {
+        scrollToBottom(true);
+        setAutoStickToBottom(true); // Enable auto-stick for future messages
+        setHasInitialized(true);
+      }, 300); // Reduced delay for better responsiveness
+
+      return () => clearTimeout(timer);
+    } else {
+      // No chat history, just mark as initialized
+      setHasInitialized(true);
+    }
+  }, [isOpen, chatHistory.length, hasInitialized, activeThreadId]);
 
   const handleScrollContainer = () => {
     const el = chatContainerRef.current;
     if (!el) return;
     if (Date.now() < programmaticScrollUntilRef.current) return;
-    const threshold = 60; // px from bottom considered as "at bottom"
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+
+    // More precise bottom detection
+    const threshold = 20; // px from bottom considered as "at bottom"
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+    const wasAtBottom = wasAtBottomRef.current;
+
+    // Update auto-stick state
     setAutoStickToBottom(atBottom);
     wasAtBottomRef.current = atBottom;
+
+    // If user just scrolled to bottom, ensure we stay there during streaming
+    if (atBottom && !wasAtBottom && hasStreamStarted) {
+      scrollToBottom(false, true);
+    }
+  };
+
+  // Helper function to check if user is at bottom
+  const isAtBottom = () => {
+    const el = chatContainerRef.current;
+    if (!el) return false;
+    const threshold = 20;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
   };
 
   // Handle user interaction that should disable auto-stick-to-bottom
@@ -186,41 +293,79 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
     setAutoStickToBottom(false);
   };
 
+  // Handle scrolling when new messages are added
   useEffect(() => {
     if (!isOpen) return;
-    if (autoStickToBottom) {
-      // Smooth only before stream starts; during streaming use auto to avoid jitter
-      scrollToBottom(!hasStreamStarted);
+
+    const len = chatHistory.length;
+    const prevLen = lastLenRef.current;
+
+    // Only trigger scroll when new messages are added
+    if (len > prevLen) {
+      const lastMessage = chatHistory[chatHistory.length - 1];
+
+      // Skip scroll if the last assistant message is empty and stream hasn't started
+      const shouldSkipScroll = lastMessage?.role === 'assistant' &&
+                             (!lastMessage.content || lastMessage.content.length === 0) &&
+                             !hasStreamStarted;
+
+      if (!shouldSkipScroll) {
+        // Use instant scroll during streaming to avoid jitter, smooth scroll otherwise
+        scrollToBottom(!hasStreamStarted, true); // Force scroll for new messages
+      }
     }
-  }, [chatHistory, isAiThinking, currentThoughts, currentToolUses, currentProgress, messageReceived, isOpen, autoStickToBottom, hasStreamStarted]);
+
+    lastLenRef.current = len;
+  }, [chatHistory.length, isOpen, hasStreamStarted]);
+
+  // Handle streaming content updates - scroll if we're at bottom
+  useEffect(() => {
+    if (!isOpen || !hasStreamStarted) return;
+    // Only auto-scroll while user is at (or sticking to) bottom
+    const el = chatContainerRef.current;
+    const userAtBottom = autoStickToBottom || (el ? (el.scrollHeight - el.scrollTop - el.clientHeight <= 20) : false);
+    if (!userAtBottom) return;
+
+    const scrollTimer = setTimeout(() => {
+      scrollToBottom(false, true);
+    }, 10);
+    return () => clearTimeout(scrollTimer);
+  }, [streamingContentLen, isOpen, hasStreamStarted, autoStickToBottom]);
 
   // Observe whether the bottom sentinel is visible within the container
   useEffect(() => {
     const root = chatContainerRef.current;
     const target = endOfMessagesRef.current;
     if (!root || !target) return;
+
     const io = new IntersectionObserver((entries) => {
       const [entry] = entries;
       if (!entry) return;
       if (Date.now() < programmaticScrollUntilRef.current) return;
-      setAutoStickToBottom(entry.isIntersecting);
-      wasAtBottomRef.current = entry.isIntersecting;
-    }, { root, threshold: 0.99 });
+
+      const atBottom = entry.isIntersecting;
+      const wasAtBottom = wasAtBottomRef.current;
+
+      setAutoStickToBottom(atBottom);
+      wasAtBottomRef.current = atBottom;
+
+      // If user just scrolled to bottom, ensure we stay there during streaming
+      if (atBottom && !wasAtBottom && hasStreamStarted) {
+        scrollToBottom(false, true);
+      }
+    }, {
+      root,
+      threshold: 0.99,
+      rootMargin: '0px 0px -20px 0px' // Consider 20px above bottom as "at bottom"
+    });
+
     io.observe(target);
     return () => io.disconnect();
-  }, [isOpen]);
+  }, [isOpen, hasStreamStarted]);
 
-  // If new messages appended while we were at bottom, auto-scroll after a tiny delay
-  useEffect(() => {
-    if (!isOpen) return;
-    const len = chatHistory.length;
-    const prev = lastLenRef.current;
-    if (len > prev && wasAtBottomRef.current) {
-      setTimeout(() => scrollToBottom(true), 60);
-    }
-    lastLenRef.current = len;
-  }, [chatHistory.length, isOpen]);
+  // This useEffect is now handled by the main scroll logic above
 
+  // Stream start scrolling is now handled by the main scroll logic above
 
   const handleSendMessage = () => {
     if (inputValue.trim() && !isAiThinking) {
@@ -232,6 +377,8 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
       } else {
         onSendMessage(trimmedMessage);
       }
+      // Ensure view is pinned to the bottom to show thinking indicator
+      requestAnimationFrame(() => scrollToBottom(false, true));
     }
   };
 
@@ -628,7 +775,11 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           {chatHistory.map((msg, index) => (
             (msg.role === 'assistant' && index === chatHistory.length - 1 && (!msg.content || msg.content.length === 0) && isAiThinking && !hasStreamStarted)
               ? null :
-            <AnimatedMessage key={index} delay={index * 150} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'user' && index === chatHistory.length - 1 && messageReceived ? 'message-received' : ''}`}>
+            <AnimatedMessage
+              key={index}
+              delay={index === chatHistory.length - 1 ? 50 : 0}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'user' && index === chatHistory.length - 1 && messageReceived ? 'message-received' : ''}`}
+            >
               <div className={`w-full px-5 py-4 rounded-2xl message-bubble ${msg.role === 'user' ? 'user' : 'assistant'}`}>
                 {msg.role === 'user' ? (
                   editingIndex === index ? (
@@ -701,7 +852,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
             </AnimatedMessage>
           ))}
           {isAiThinking && !hasStreamStarted && (
-            <AnimatedMessage delay={80} className="flex justify-start">
+            <AnimatedMessage delay={0} className="flex justify-start">
               <div className="w-full">
                 <ThinkingIndicator
                   thoughts={currentThoughts}
@@ -754,18 +905,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
 
 export default EnhancedChatPanel;
 
-// Export additional icons that are used
-export const ChevronDownIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-  </svg>
-);
-
-export const ChevronRightIcon: React.FC<{ className?: string }> = ({ className = "w-4 h-4" }) => (
-  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-  </svg>
-);
+// Icons are imported from './icons/Icons'
 
 // Minimal, Codex-like step timeline for reasoning
 const ReasoningSteps: React.FC<{ thoughts: ThoughtProcess[]; activeIndex?: number }> = ({ thoughts, activeIndex }) => {
