@@ -18,6 +18,7 @@ interface EnhancedChatPanelProps {
   onSendMessage: (message: string) => void;
   onResendEdited: (message: string) => void;
   isAiThinking: boolean;
+  hasStreamStarted?: boolean;
   inputValue: string;
   onInputChange: (value: string) => void;
   onNavigateToPage: (page: number) => void;
@@ -53,8 +54,9 @@ const ThinkingIndicator: React.FC<{
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium"
              style={{ backgroundColor: 'rgba(44, 62, 80, 0.08)', color: '#2c3e50' }}>
           <Spinner className="w-4 h-4 thinking-pulse" />
-          <span>
-            {messageReceived ? 'Message received…' : progress || (latestThought ? latestThought.stage : 'Thinking…')}
+          <span className="flex items-center gap-1">
+            {messageReceived ? 'Message received' : (progress || (latestThought ? latestThought.stage : 'Thinking'))}
+            <span className="codex-caret" aria-hidden> </span>
           </span>
           {thoughts.length > 0 && (
             <span className="opacity-70 ml-1">· Step {activeIndex + 1}</span>
@@ -74,13 +76,18 @@ const ThinkingIndicator: React.FC<{
         </button>
       </div>
 
+      {/* Codex-like token stream */}
+      <div className="codex-stream mb-3">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <span key={i} className="bar" style={{ animationDelay: `${i * 80}ms` }} />
+        ))}
+      </div>
+
       {expanded && (
         <div className="space-y-3">
           {thoughts.length > 0 && (
             <ReasoningSteps thoughts={thoughts} activeIndex={activeIndex} />
           )}
-
-          {/* Tools UI removed per request */}
         </div>
       )}
     </div>
@@ -143,11 +150,20 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   editingIndex,
   onStartEditMessage,
   onCancelEdit,
+  hasStreamStarted = false,
 }) => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const endOfMessagesRef = useRef<HTMLDivElement>(null);
   const [autoStickToBottom, setAutoStickToBottom] = useState(true);
+  const programmaticScrollUntilRef = useRef<number>(0);
+  const wasAtBottomRef = useRef<boolean>(true);
+  const lastLenRef = useRef<number>(0);
+
+  const scrollToBottom = (smooth: boolean) => {
+    programmaticScrollUntilRef.current = Date.now() + 500; // ignore scroll events briefly
+    endOfMessagesRef.current?.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'end' });
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -158,9 +174,11 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   const handleScrollContainer = () => {
     const el = chatContainerRef.current;
     if (!el) return;
+    if (Date.now() < programmaticScrollUntilRef.current) return;
     const threshold = 60; // px from bottom considered as "at bottom"
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     setAutoStickToBottom(atBottom);
+    wasAtBottomRef.current = atBottom;
   };
 
   // Handle user interaction that should disable auto-stick-to-bottom
@@ -171,10 +189,37 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     if (autoStickToBottom) {
-      // Scroll a sentinel into view to handle animated height changes
-      endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      // Smooth only before stream starts; during streaming use auto to avoid jitter
+      scrollToBottom(!hasStreamStarted);
     }
-  }, [chatHistory, isAiThinking, currentThoughts, currentToolUses, currentProgress, messageReceived, isOpen, autoStickToBottom]);
+  }, [chatHistory, isAiThinking, currentThoughts, currentToolUses, currentProgress, messageReceived, isOpen, autoStickToBottom, hasStreamStarted]);
+
+  // Observe whether the bottom sentinel is visible within the container
+  useEffect(() => {
+    const root = chatContainerRef.current;
+    const target = endOfMessagesRef.current;
+    if (!root || !target) return;
+    const io = new IntersectionObserver((entries) => {
+      const [entry] = entries;
+      if (!entry) return;
+      if (Date.now() < programmaticScrollUntilRef.current) return;
+      setAutoStickToBottom(entry.isIntersecting);
+      wasAtBottomRef.current = entry.isIntersecting;
+    }, { root, threshold: 0.99 });
+    io.observe(target);
+    return () => io.disconnect();
+  }, [isOpen]);
+
+  // If new messages appended while we were at bottom, auto-scroll after a tiny delay
+  useEffect(() => {
+    if (!isOpen) return;
+    const len = chatHistory.length;
+    const prev = lastLenRef.current;
+    if (len > prev && wasAtBottomRef.current) {
+      setTimeout(() => scrollToBottom(true), 60);
+    }
+    lastLenRef.current = len;
+  }, [chatHistory.length, isOpen]);
 
 
   const handleSendMessage = () => {
@@ -310,6 +355,28 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
 
         .thinking-pulse {
           animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        /* Codex-style caret and token stream */
+        @keyframes caretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+        .codex-caret {
+          width: 8px;
+          height: 1.1em;
+          border-left: 2px solid #2c3e50;
+          display: inline-block;
+          animation: caretBlink 1s steps(1) infinite;
+          transform: translateY(1px);
+        }
+        .codex-stream { display: flex; align-items: center; gap: 6px; padding: 0 2px; }
+        .codex-stream .bar {
+          width: 6px; height: 10px; border-radius: 2px;
+          background: linear-gradient(180deg, #2c3e50 0%, #8aa0b4 100%);
+          opacity: 0.6;
+          animation: streamPulse 900ms ease-in-out infinite;
+        }
+        @keyframes streamPulse {
+          0%, 100% { transform: scaleY(0.6); opacity: 0.4; }
+          50% { transform: scaleY(1.2); opacity: 1; }
         }
 
         /* Enhanced message animations */
@@ -550,9 +617,17 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           ref={chatContainerRef}
           onScroll={handleScrollContainer}
           onWheel={handleUserInteraction}
+          onMouseDown={handleUserInteraction}
+          onTouchStart={handleUserInteraction}
+          onKeyDownCapture={(e) => {
+            const keys = ['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', 'Space'];
+            if (keys.includes(e.key)) setAutoStickToBottom(false);
+          }}
           className="flex-grow p-6 overflow-y-auto space-y-6"
         >
           {chatHistory.map((msg, index) => (
+            (msg.role === 'assistant' && index === chatHistory.length - 1 && (!msg.content || msg.content.length === 0) && isAiThinking && !hasStreamStarted)
+              ? null :
             <AnimatedMessage key={index} delay={index * 150} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'user' && index === chatHistory.length - 1 && messageReceived ? 'message-received' : ''}`}>
               <div className={`w-full px-5 py-4 rounded-2xl message-bubble ${msg.role === 'user' ? 'user' : 'assistant'}`}>
                 {msg.role === 'user' ? (
@@ -625,6 +700,18 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
               </div>
             </AnimatedMessage>
           ))}
+          {isAiThinking && !hasStreamStarted && (
+            <AnimatedMessage delay={80} className="flex justify-start">
+              <div className="w-full">
+                <ThinkingIndicator
+                  thoughts={currentThoughts}
+                  toolUses={currentToolUses}
+                  messageReceived={messageReceived}
+                  progress={currentProgress || ''}
+                />
+              </div>
+            </AnimatedMessage>
+          )}
           <div ref={endOfMessagesRef} />
         </div>
 

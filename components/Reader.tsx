@@ -32,6 +32,10 @@ type ThreadEphemeralState = {
   currentProgress: string;
   messageReceived: boolean;
   editingIndex: number | null;
+  hasStreamStarted: boolean;
+  requestStartAt: number | null;
+  bufferedTokens: string;
+  isDelayingStream: boolean;
 };
 
 const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
@@ -65,6 +69,38 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     return t;
   };
 
+  // Streaming text de-dup helpers to avoid repeated paragraphs/sentences
+  const collapseSuffixDuplicates = (text: string): string => {
+    const maxTail = 1200;
+    const tail = text.slice(-maxTail);
+    const maxHalf = Math.min(400, Math.floor(tail.length / 2));
+    for (let L = maxHalf; L >= 50; L--) {
+      const a = tail.slice(tail.length - 2 * L, tail.length - L);
+      const b = tail.slice(tail.length - L);
+      if (a === b) {
+        return text.slice(0, text.length - L);
+      }
+    }
+    return text;
+  };
+  const collapseDuplicateParagraphTail = (text: string): string => {
+    const parts = text.split(/\n{2,}/);
+    if (parts.length < 2) return text;
+    const last = parts[parts.length - 1].trim();
+    const prev = parts[parts.length - 2].trim();
+    if (last && prev && last === prev && last.length >= 60) {
+      parts.pop();
+      return parts.join('\n\n');
+    }
+    return text;
+  };
+  const dedupeAppend = (base: string, delta: string): string => {
+    let merged = base + delta;
+    merged = collapseSuffixDuplicates(merged);
+    merged = collapseDuplicateParagraphTail(merged);
+    return merged;
+  };
+
   // Thread management helpers and persistence
   const keyForBook = (b: Book) => `chatThreads:${b.id}`;
 
@@ -81,6 +117,10 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           currentProgress: '',
           messageReceived: false,
           editingIndex: null,
+          hasStreamStarted: false,
+          requestStartAt: null,
+          bufferedTokens: '',
+          isDelayingStream: false,
         }
       };
     });
@@ -177,7 +217,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
   const activeThread = threads.find(t => t.id === activeThreadId) || null;
   const activeState: ThreadEphemeralState = activeThreadId && threadStates[activeThreadId]
     ? threadStates[activeThreadId]
-    : { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false, editingIndex: null };
+    : { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false, editingIndex: null, hasStreamStarted: false, requestStartAt: null, bufferedTokens: '', isDelayingStream: false };
 
   // Handle text selection within the PDF.js viewer to show our popup
   useEffect(() => {
@@ -387,6 +427,10 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         currentThoughts: [],
         currentToolUses: [],
         currentProgress: '',
+        hasStreamStarted: false,
+        requestStartAt: Date.now(),
+        bufferedTokens: '',
+        isDelayingStream: false,
       }
     }));
 
@@ -446,17 +490,93 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           }));
         },
         onToken: (token) => {
-          // Append streaming token to the last assistant message
-          setThreads(prev => prev.map(t => {
-            if (t.id !== threadId) return t;
-            const msgs = [...t.messages];
-            const lastIdx = msgs.length - 1;
-            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-              const last = msgs[lastIdx] as EnhancedChatMessage;
-              msgs[lastIdx] = { ...last, content: (last.content || '') + token };
+          const MIN_THINKING_MS = 350;
+          const now = Date.now();
+          setThreadStates(prev => {
+            const st = prev[threadId] || activeState;
+            const startedAt = st.requestStartAt || now;
+            const elapsed = now - startedAt;
+            if (st.hasStreamStarted && !st.isDelayingStream) {
+              setThreads(prevT => prevT.map(t => {
+                if (t.id !== threadId) return t;
+                const msgs = [...t.messages];
+                const lastIdx = msgs.length - 1;
+                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                  const last = msgs[lastIdx] as EnhancedChatMessage;
+                  const newContent = dedupeAppend((last.content || ''), token);
+                  msgs[lastIdx] = { ...last, content: newContent };
+                }
+                return { ...t, messages: msgs };
+              }));
+              return prev;
             }
-            return { ...t, messages: msgs };
-          }));
+            if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
+              const newBuffered = (st.bufferedTokens || '') + token;
+              if (!st.isDelayingStream) {
+                const delay = Math.max(0, MIN_THINKING_MS - elapsed);
+                setTimeout(() => {
+                  setThreadStates(prev2 => {
+                    const st2 = prev2[threadId] || activeState;
+                    if (st2.hasStreamStarted) return prev2;
+                    const buffered = st2.bufferedTokens || '';
+                    if (buffered) {
+                      setThreads(prevT2 => prevT2.map(t => {
+                        if (t.id !== threadId) return t;
+                        const msgs = [...t.messages];
+                        const lastIdx = msgs.length - 1;
+                        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                          const last = msgs[lastIdx] as EnhancedChatMessage;
+                          const newContent = dedupeAppend((last.content || ''), buffered);
+                          msgs[lastIdx] = { ...last, content: newContent };
+                        }
+                        return { ...t, messages: msgs };
+                      }));
+                    }
+                    return {
+                      ...prev2,
+                      [threadId]: {
+                        ...(st2 || activeState),
+                        ...st2,
+                        hasStreamStarted: true,
+                        isDelayingStream: false,
+                        bufferedTokens: '',
+                      }
+                    };
+                  });
+                }, delay);
+              }
+              return {
+                ...prev,
+                [threadId]: {
+                  ...(st || activeState),
+                  ...st,
+                  isDelayingStream: true,
+                  bufferedTokens: newBuffered,
+                }
+              };
+            }
+            // Start streaming immediately
+            setThreads(prevT => prevT.map(t => {
+              if (t.id !== threadId) return t;
+              const msgs = [...t.messages];
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                const last = msgs[lastIdx] as EnhancedChatMessage;
+                const newContent = dedupeAppend((last.content || ''), token);
+                msgs[lastIdx] = { ...last, content: newContent };
+              }
+              return { ...t, messages: msgs };
+            }));
+            return {
+              ...prev,
+              [threadId]: {
+                ...(st || activeState),
+                ...st,
+                hasStreamStarted: true,
+                isDelayingStream: false,
+              }
+            };
+          });
         },
         onDone: () => {
           // no-op here; finalization below will set toolUses/thoughts
@@ -505,6 +625,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           ...prev[threadId],
           isAiThinking: false,
           messageReceived: false,
+          hasStreamStarted: false,
           // keep progress/thoughts/toolUses to show in UI until next message
         }
       }));
@@ -548,6 +669,10 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         currentToolUses: [],
         currentProgress: '',
         editingIndex: null,
+        hasStreamStarted: false,
+        requestStartAt: Date.now(),
+        bufferedTokens: '',
+        isDelayingStream: false,
       }
     }));
 
@@ -605,16 +730,92 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           }));
         },
         onToken: (token) => {
-          setThreads(prev => prev.map(t => {
-            if (t.id !== threadId) return t;
-            const msgs = [...t.messages];
-            const lastIdx = msgs.length - 1;
-            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-              const last = msgs[lastIdx] as EnhancedChatMessage;
-              msgs[lastIdx] = { ...last, content: (last.content || '') + token };
+          const MIN_THINKING_MS = 350;
+          const now = Date.now();
+          setThreadStates(prev => {
+            const st = prev[threadId] || activeState;
+            const startedAt = st.requestStartAt || now;
+            const elapsed = now - startedAt;
+            if (st.hasStreamStarted && !st.isDelayingStream) {
+              setThreads(prevT => prevT.map(t => {
+                if (t.id !== threadId) return t;
+                const msgs = [...t.messages];
+                const lastIdx = msgs.length - 1;
+                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                  const last = msgs[lastIdx] as EnhancedChatMessage;
+                  const newContent = dedupeAppend((last.content || ''), token);
+                  msgs[lastIdx] = { ...last, content: newContent };
+                }
+                return { ...t, messages: msgs };
+              }));
+              return prev;
             }
-            return { ...t, messages: msgs };
-          }));
+            if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
+              const newBuffered = (st.bufferedTokens || '') + token;
+              if (!st.isDelayingStream) {
+                const delay = Math.max(0, MIN_THINKING_MS - elapsed);
+                setTimeout(() => {
+                  setThreadStates(prev2 => {
+                    const st2 = prev2[threadId] || activeState;
+                    if (st2.hasStreamStarted) return prev2;
+                    const buffered = st2.bufferedTokens || '';
+                    if (buffered) {
+                      setThreads(prevT2 => prevT2.map(t => {
+                        if (t.id !== threadId) return t;
+                        const msgs = [...t.messages];
+                        const lastIdx = msgs.length - 1;
+                        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                          const last = msgs[lastIdx] as EnhancedChatMessage;
+                          const newContent = dedupeAppend((last.content || ''), buffered);
+                          msgs[lastIdx] = { ...last, content: newContent };
+                        }
+                        return { ...t, messages: msgs };
+                      }));
+                    }
+                    return {
+                      ...prev2,
+                      [threadId]: {
+                        ...(st2 || activeState),
+                        ...st2,
+                        hasStreamStarted: true,
+                        isDelayingStream: false,
+                        bufferedTokens: '',
+                      }
+                    };
+                  });
+                }, delay);
+              }
+              return {
+                ...prev,
+                [threadId]: {
+                  ...(st || activeState),
+                  ...st,
+                  isDelayingStream: true,
+                  bufferedTokens: newBuffered,
+                }
+              };
+            }
+            setThreads(prevT => prevT.map(t => {
+              if (t.id !== threadId) return t;
+              const msgs = [...t.messages];
+              const lastIdx = msgs.length - 1;
+              if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
+                const last = msgs[lastIdx] as EnhancedChatMessage;
+                const newContent = dedupeAppend((last.content || ''), token);
+                msgs[lastIdx] = { ...last, content: newContent };
+              }
+              return { ...t, messages: msgs };
+            }));
+            return {
+              ...prev,
+              [threadId]: {
+                ...(st || activeState),
+                ...st,
+                hasStreamStarted: true,
+                isDelayingStream: false,
+              }
+            };
+          });
         },
         onDone: () => {}
       });
@@ -656,6 +857,9 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
           ...prev[threadId],
           isAiThinking: false,
           messageReceived: false,
+          requestStartAt: null,
+          bufferedTokens: '',
+          isDelayingStream: false,
         }
       }));
     }
@@ -798,14 +1002,14 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                 onResendEdited={handleResendEdited}
                 isAiThinking={activeState.isAiThinking}
                 inputValue={activeState.inputValue}
-                onInputChange={(v) => setThreadStates(prev => ({
-                  ...prev,
-                  [activeThreadId]: {
-                    ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false }),
-                    ...prev[activeThreadId],
-                    inputValue: v,
-                  }
-                }))}
+            onInputChange={(v) => setThreadStates(prev => ({
+              ...prev,
+              [activeThreadId]: {
+                ...(prev[activeThreadId] || { inputValue: '', isAiThinking: false, currentThoughts: [], currentToolUses: [], currentProgress: '', messageReceived: false, hasStreamStarted: false }),
+                ...prev[activeThreadId],
+                inputValue: v,
+              }
+            }))}
                 onNavigateToPage={handleNavigateToPage}
                 currentThoughts={activeState.currentThoughts}
                 currentToolUses={activeState.currentToolUses}
@@ -835,6 +1039,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                     inputValue: '',
                   }
                 }))}
+                hasStreamStarted={activeState.hasStreamStarted}
             />
         </div>
       </div>

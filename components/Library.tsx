@@ -3,7 +3,8 @@ import { Book, Chunk } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
 import Spinner from './ui/Spinner';
 import * as enhancedRagService from '../services/enhancedRagService';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
+// Pin to explicit module file to avoid stale prebundled versions in dev
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf.mjs';
 // Configure pdf.js worker once at module load
 try {
   // @ts-ignore

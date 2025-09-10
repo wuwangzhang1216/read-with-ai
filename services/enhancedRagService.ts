@@ -330,12 +330,31 @@ Answer:
   callbacks?.onProgress?.("Generating comprehensive answer...");
 
   // Stream tokens so UI can render incremental response
+  // Some providers yield cumulative text, others yield deltas.
+  // Normalize to deltas to avoid duplicate appends in the UI.
   let answer = "";
+  let accumulated = "";
   const stream = await answerChain.stream({ context, question: query });
   for await (const chunk of stream) {
-    const token = typeof chunk === 'string' ? chunk : String(chunk);
-    answer += token;
-    callbacks?.onToken?.(token);
+    const next = typeof chunk === 'string' ? chunk : String(chunk);
+    let delta = "";
+    if (next.startsWith(accumulated)) {
+      delta = next.slice(accumulated.length);
+    } else if (accumulated.startsWith(next)) {
+      // Provider emitted a shorter prefix; skip as it doesn't add new text
+      delta = "";
+    } else {
+      // Fallback: compute longest common prefix and append the remainder
+      let i = 0;
+      const minLen = Math.min(next.length, accumulated.length);
+      while (i < minLen && next.charCodeAt(i) === accumulated.charCodeAt(i)) i++;
+      delta = next.slice(i);
+    }
+    accumulated = next;
+    if (delta) {
+      answer += delta;
+      callbacks?.onToken?.(delta);
+    }
   }
   callbacks?.onDone?.();
 
@@ -352,6 +371,8 @@ Answer:
   thoughts.push(generatedThought);
   callbacks?.onThought?.(generatedThought);
 
+  // Ensure answer holds the final text
+  if (!answer && accumulated) answer = accumulated;
   return answer;
 }
 

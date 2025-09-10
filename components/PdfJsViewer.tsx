@@ -191,6 +191,7 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
       }}
     >
       <div
+        ref={toolbarRef}
         style={{
           position: 'sticky',
           top: 12,
