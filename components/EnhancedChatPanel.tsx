@@ -48,6 +48,18 @@ const ThinkingIndicator: React.FC<{
   const latestThought = thoughts[thoughts.length - 1];
   const latestTool = toolUses[toolUses.length - 1];
   const activeIndex = Math.max(0, thoughts.length - 1);
+  const isWriting = React.useMemo(() => /generating|writing/i.test(progress || ''), [progress]);
+  const hasReasoningStep = React.useMemo(
+    () => thoughts?.some(t => (t?.stage || '').toLowerCase().includes('reasoning')),
+    [thoughts]
+  );
+  const statusText = React.useMemo(() => {
+    const p = progress || '';
+    if (isWriting) return 'Writing answer…';
+    if (p) return p;
+    if (messageReceived) return 'Message received';
+    return latestThought ? latestThought.stage : 'Thinking';
+  }, [progress, isWriting, messageReceived, latestThought]);
   return (
     <div className="message-bubble assistant w-full">
       <div className="flex items-center justify-between mb-3">
@@ -55,7 +67,7 @@ const ThinkingIndicator: React.FC<{
              style={{ backgroundColor: 'rgba(44, 62, 80, 0.08)', color: '#2c3e50' }}>
           <Spinner className="w-4 h-4 thinking-pulse" />
           <span className="flex items-center gap-1">
-            {messageReceived ? 'Message received' : (progress || (latestThought ? latestThought.stage : 'Thinking'))}
+            {statusText}
             <span className="codex-caret" aria-hidden> </span>
           </span>
           {thoughts.length > 0 && (
@@ -88,6 +100,24 @@ const ThinkingIndicator: React.FC<{
           {thoughts.length > 0 && (
             <ReasoningSteps thoughts={thoughts} activeIndex={activeIndex} />
           )}
+        </div>
+      )}
+
+      {/* Writing placeholder bubble to indicate composing (below reasoning) */}
+      {isWriting && hasReasoningStep && (
+        <div className="writing-bubble mb-3">
+          <div className="typing-row">
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+            <span className="typing-dot" />
+            <span className="typing-label">Writing answer…</span>
+          </div>
+          <div className="skeleton-lines mt-3">
+            <div className="skeleton-line" style={{ width: '92%' }} />
+            <div className="skeleton-line" style={{ width: '86%' }} />
+            <div className="skeleton-line" style={{ width: '78%' }} />
+            <div className="skeleton-line" style={{ width: '64%' }} />
+          </div>
         </div>
       )}
     </div>
@@ -566,6 +596,40 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           background: var(--hover-color);
           box-shadow: none;
           border: 1px solid var(--border-color);
+        }
+
+        /* Writing placeholder bubble */
+        .writing-bubble {
+          background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(240, 237, 230, 0.95) 100%);
+          border: 1px solid var(--border-color);
+          border-radius: 14px;
+          padding: 12px 14px;
+        }
+        .typing-row { display: flex; align-items: center; gap: 8px; }
+        .typing-label { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
+        .typing-dot {
+          width: 6px; height: 6px; border-radius: 9999px;
+          background: #2c3e50; opacity: 0.7;
+          animation: typingBounce 1.2s ease-in-out infinite;
+        }
+        .typing-dot:nth-child(1) { animation-delay: 0ms; }
+        .typing-dot:nth-child(2) { animation-delay: 150ms; }
+        .typing-dot:nth-child(3) { animation-delay: 300ms; }
+        @keyframes typingBounce {
+          0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
+          40% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        .skeleton-lines { display: grid; gap: 10px; }
+        .skeleton-line {
+          height: 10px; border-radius: 6px;
+          background: linear-gradient(90deg, rgba(44,62,80,0.08) 0%, rgba(44,62,80,0.16) 50%, rgba(44,62,80,0.08) 100%);
+          background-size: 200% 100%;
+          animation: shimmer 1.1s linear infinite;
+        }
+        @keyframes shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
         }
 
         /* Enhanced input styling */

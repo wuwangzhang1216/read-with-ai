@@ -468,103 +468,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             }
           }));
         },
-        onToken: (token) => {
-          const MIN_THINKING_MS = 350;
-          const now = Date.now();
-          setThreadStates(prev => {
-            const st = prev[threadId] || activeState;
-            const startedAt = st.requestStartAt || now;
-            const elapsed = now - startedAt;
-            if (st.hasStreamStarted && !st.isDelayingStream) {
-              setThreads(prevT => prevT.map(t => {
-                if (t.id !== threadId) return t;
-                const msgs = [...t.messages];
-                const lastIdx = msgs.length - 1;
-                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                  const last = msgs[lastIdx] as EnhancedChatMessage;
-                  const newContent = (last.content || '') + token;
-                  msgs[lastIdx] = { ...last, content: newContent };
-                }
-                return { ...t, messages: msgs };
-              }));
-
-              // Ask panel to ensure bottom (extra safety during stream)
-              try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-
-              // Note: Scrolling during streaming is now handled automatically by EnhancedChatPanel
-
-              return prev;
-            }
-            if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
-              const newBuffered = (st.bufferedTokens || '') + token;
-              if (!st.isDelayingStream) {
-                const delay = Math.max(0, MIN_THINKING_MS - elapsed);
-                setTimeout(() => {
-                  setThreadStates(prev2 => {
-                    const st2 = prev2[threadId] || activeState;
-                    if (st2.hasStreamStarted) return prev2;
-                    const buffered = st2.bufferedTokens || '';
-                    if (buffered) {
-                      setThreads(prevT2 => prevT2.map(t => {
-                        if (t.id !== threadId) return t;
-                        const msgs = [...t.messages];
-                        const lastIdx = msgs.length - 1;
-                        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                          const last = msgs[lastIdx] as EnhancedChatMessage;
-                          const newContent = (last.content || '') + buffered;
-                          msgs[lastIdx] = { ...last, content: newContent };
-                        }
-                        return { ...t, messages: msgs };
-                      }));
-                      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-                    }
-                    return {
-                      ...prev2,
-                      [threadId]: {
-                        ...(st2 || activeState),
-                        ...st2,
-                        hasStreamStarted: true,
-                        isDelayingStream: false,
-                        bufferedTokens: '',
-                      }
-                    };
-                  });
-                }, delay);
-              }
-              return {
-                ...prev,
-                [threadId]: {
-                  ...(st || activeState),
-                  ...st,
-                  isDelayingStream: true,
-                  bufferedTokens: newBuffered,
-                }
-              };
-            }
-            // Start streaming immediately
-            setThreads(prevT => prevT.map(t => {
-              if (t.id !== threadId) return t;
-              const msgs = [...t.messages];
-              const lastIdx = msgs.length - 1;
-              if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                const last = msgs[lastIdx] as EnhancedChatMessage;
-                const newContent = (last.content || '') + token;
-                msgs[lastIdx] = { ...last, content: newContent };
-              }
-              return { ...t, messages: msgs };
-            }));
-            try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-            return {
-              ...prev,
-              [threadId]: {
-                ...(st || activeState),
-                ...st,
-                hasStreamStarted: true,
-                isDelayingStream: false,
-              }
-            };
-          });
-        },
+        // Streaming disabled: no onToken handler
         onDone: () => {
           // no-op here; finalization below will set toolUses/thoughts
         }
@@ -573,17 +477,19 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
         threadId: activeThread?.id || undefined,
       });
 
-      // Update last assistant message with final metadata; content already streamed
+      // Finalize last assistant message with full answer (no streaming)
       setThreads(prev => prev.map(t => {
         if (t.id !== threadId) return t;
         const msgs = [...t.messages];
         const lastIdx = msgs.length - 1;
         if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
           const last = msgs[lastIdx] as EnhancedChatMessage;
-          msgs[lastIdx] = { ...last, thoughts: result.thoughts, toolUses: result.toolUses };
+          msgs[lastIdx] = { ...last, content: result.answer, thoughts: result.thoughts, toolUses: result.toolUses };
         }
         return { ...t, messages: msgs };
       }));
+      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
+      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
     } catch (error) {
       console.error("Failed to get answer from AI:", error);
       const errorMessage: EnhancedChatMessage = {
@@ -719,114 +625,25 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             }
           }));
         },
-        onToken: (token) => {
-          const MIN_THINKING_MS = 350;
-          const now = Date.now();
-          setThreadStates(prev => {
-            const st = prev[threadId] || activeState;
-            const startedAt = st.requestStartAt || now;
-            const elapsed = now - startedAt;
-            if (st.hasStreamStarted && !st.isDelayingStream) {
-              setThreads(prevT => prevT.map(t => {
-                if (t.id !== threadId) return t;
-                const msgs = [...t.messages];
-                const lastIdx = msgs.length - 1;
-                if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                  const last = msgs[lastIdx] as EnhancedChatMessage;
-                  const newContent = (last.content || '') + token;
-                  msgs[lastIdx] = { ...last, content: newContent };
-                }
-                return { ...t, messages: msgs };
-              }));
-              try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-              return prev;
-            }
-            if (elapsed < MIN_THINKING_MS || st.isDelayingStream) {
-              const newBuffered = (st.bufferedTokens || '') + token;
-              if (!st.isDelayingStream) {
-                const delay = Math.max(0, MIN_THINKING_MS - elapsed);
-                setTimeout(() => {
-                  setThreadStates(prev2 => {
-                    const st2 = prev2[threadId] || activeState;
-                    if (st2.hasStreamStarted) return prev2;
-                    const buffered = st2.bufferedTokens || '';
-                    if (buffered) {
-                      setThreads(prevT2 => prevT2.map(t => {
-                        if (t.id !== threadId) return t;
-                        const msgs = [...t.messages];
-                        const lastIdx = msgs.length - 1;
-                        if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                          const last = msgs[lastIdx] as EnhancedChatMessage;
-                          const newContent = (last.content || '') + buffered;
-                          msgs[lastIdx] = { ...last, content: newContent };
-                        }
-                        return { ...t, messages: msgs };
-                      }));
-                      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-                    }
-                    return {
-                      ...prev2,
-                      [threadId]: {
-                        ...(st2 || activeState),
-                        ...st2,
-                        hasStreamStarted: true,
-                        isDelayingStream: false,
-                        bufferedTokens: '',
-                      }
-                    };
-                  });
-                }, delay);
-              }
-              return {
-                ...prev,
-                [threadId]: {
-                  ...(st || activeState),
-                  ...st,
-                  isDelayingStream: true,
-                  bufferedTokens: newBuffered,
-                }
-              };
-            }
-            setThreads(prevT => prevT.map(t => {
-              if (t.id !== threadId) return t;
-              const msgs = [...t.messages];
-              const lastIdx = msgs.length - 1;
-              if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                const last = msgs[lastIdx] as EnhancedChatMessage;
-                const newContent = (last.content || '') + token;
-                msgs[lastIdx] = { ...last, content: newContent };
-              }
-              return { ...t, messages: msgs };
-            }));
-            try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
-            return {
-              ...prev,
-              [threadId]: {
-                ...(st || activeState),
-                ...st,
-                hasStreamStarted: true,
-                isDelayingStream: false,
-              }
-            };
-          });
-        },
+        // Streaming disabled: no onToken handler
         onDone: () => {}
       }, {
         chatHistory: (threads.find(t => t.id === threadId)?.messages || []).map(m => ({ role: m.role, content: m.content })),
         threadId,
       });
 
-      // Finalize last assistant message
+      // Finalize last assistant message with full answer (no streaming)
       setThreads(prev => prev.map(t => {
         if (t.id !== threadId) return t;
         const msgs = [...t.messages];
         const lastIdx = msgs.length - 1;
         if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
           const last = msgs[lastIdx] as EnhancedChatMessage;
-          msgs[lastIdx] = { ...last, thoughts: result.thoughts, toolUses: result.toolUses };
+          msgs[lastIdx] = { ...last, content: result.answer, thoughts: result.thoughts, toolUses: result.toolUses };
         }
         return { ...t, messages: msgs };
       }));
+      try { window.dispatchEvent(new Event('streamScrollToBottom')); } catch {}
     } catch (error) {
       console.error('Failed to regenerate after edit:', error);
       const errorMessage: EnhancedChatMessage = {

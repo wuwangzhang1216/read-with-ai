@@ -430,19 +430,11 @@ Answer:
 
   callbacks?.onProgress?.("Generating comprehensive answer...");
 
-  // Stream tokens directly so UI can render incremental response
-  let answer = "";
-  const stream = await answerChain.stream({ system: buildSystemInstructions(), context, chat_context, question: query });
-  for await (const chunk of stream) {
-    const delta = typeof chunk === 'string' ? chunk : String(chunk);
-    answer += delta;
-    callbacks?.onToken?.(delta);
-  }
+  // Non-streaming mode only: return complete answer via invoke
+  const fullAnswer = await answerChain.invoke({ system: buildSystemInstructions(), context, chat_context, question: query });
   callbacks?.onDone?.();
 
-  answerGenTool.output = {
-    answerLength: answer.length
-  };
+  answerGenTool.output = { answerLength: (fullAnswer || '').length };
   callbacks?.onToolUse?.({ ...answerGenTool, output: answerGenTool.output });
 
   const generatedThought: ThoughtProcess = {
@@ -453,8 +445,7 @@ Answer:
   thoughts.push(generatedThought);
   callbacks?.onThought?.(generatedThought);
 
-  // Return the final accumulated answer
-  return answer;
+  return fullAnswer;
 }
 
 // Main RAG pipeline with enhanced features
