@@ -70,37 +70,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
     return t;
   };
 
-  // Streaming text de-dup helpers to avoid repeated paragraphs/sentences
-  const collapseSuffixDuplicates = (text: string): string => {
-    const maxTail = 1200;
-    const tail = text.slice(-maxTail);
-    const maxHalf = Math.min(400, Math.floor(tail.length / 2));
-    for (let L = maxHalf; L >= 50; L--) {
-      const a = tail.slice(tail.length - 2 * L, tail.length - L);
-      const b = tail.slice(tail.length - L);
-      if (a === b) {
-        return text.slice(0, text.length - L);
-      }
-    }
-    return text;
-  };
-  const collapseDuplicateParagraphTail = (text: string): string => {
-    const parts = text.split(/\n{2,}/);
-    if (parts.length < 2) return text;
-    const last = parts[parts.length - 1].trim();
-    const prev = parts[parts.length - 2].trim();
-    if (last && prev && last === prev && last.length >= 60) {
-      parts.pop();
-      return parts.join('\n\n');
-    }
-    return text;
-  };
-  const dedupeAppend = (base: string, delta: string): string => {
-    let merged = base + delta;
-    merged = collapseSuffixDuplicates(merged);
-    merged = collapseDuplicateParagraphTail(merged);
-    return merged;
-  };
+  // Streamed token append: directly concatenate without de-duplication
 
   // Thread management helpers and persistence
   const keyForBook = (b: Book) => `chatThreads:${b.id}`;
@@ -512,7 +482,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                 const lastIdx = msgs.length - 1;
                 if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                   const last = msgs[lastIdx] as EnhancedChatMessage;
-                  const newContent = dedupeAppend((last.content || ''), token);
+                  const newContent = (last.content || '') + token;
                   msgs[lastIdx] = { ...last, content: newContent };
                 }
                 return { ...t, messages: msgs };
@@ -541,7 +511,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                         const lastIdx = msgs.length - 1;
                         if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                           const last = msgs[lastIdx] as EnhancedChatMessage;
-                          const newContent = dedupeAppend((last.content || ''), buffered);
+                          const newContent = (last.content || '') + buffered;
                           msgs[lastIdx] = { ...last, content: newContent };
                         }
                         return { ...t, messages: msgs };
@@ -578,7 +548,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                 const last = msgs[lastIdx] as EnhancedChatMessage;
-                const newContent = dedupeAppend((last.content || ''), token);
+                const newContent = (last.content || '') + token;
                 msgs[lastIdx] = { ...last, content: newContent };
               }
               return { ...t, messages: msgs };
@@ -763,7 +733,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                 const lastIdx = msgs.length - 1;
                 if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                   const last = msgs[lastIdx] as EnhancedChatMessage;
-                  const newContent = dedupeAppend((last.content || ''), token);
+                  const newContent = (last.content || '') + token;
                   msgs[lastIdx] = { ...last, content: newContent };
                 }
                 return { ...t, messages: msgs };
@@ -787,7 +757,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
                         const lastIdx = msgs.length - 1;
                         if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                           const last = msgs[lastIdx] as EnhancedChatMessage;
-                          const newContent = dedupeAppend((last.content || ''), buffered);
+                          const newContent = (last.content || '') + buffered;
                           msgs[lastIdx] = { ...last, content: newContent };
                         }
                         return { ...t, messages: msgs };
@@ -823,7 +793,7 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
               const lastIdx = msgs.length - 1;
               if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
                 const last = msgs[lastIdx] as EnhancedChatMessage;
-                const newContent = dedupeAppend((last.content || ''), token);
+                const newContent = (last.content || '') + token;
                 msgs[lastIdx] = { ...last, content: newContent };
               }
               return { ...t, messages: msgs };
