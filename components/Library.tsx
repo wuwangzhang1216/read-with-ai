@@ -1,7 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Book, Chunk } from '../types';
 import { BookIcon, DeleteIcon, UploadIcon } from './icons/Icons';
-import Spinner from './ui/Spinner';
 import * as enhancedRagService from '../services/enhancedRagService';
 // Pin to explicit module file to avoid stale prebundled versions in dev
 import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/build/pdf.mjs';
@@ -129,7 +128,6 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
         >
           {isProcessing ? (
             <>
-              <Spinner />
               <span className="truncate">{processingStatus || 'Processing...'}</span>
             </>
           ) : (

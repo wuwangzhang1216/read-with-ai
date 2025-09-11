@@ -2,7 +2,6 @@ import React, { useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { ChatMessage } from '../types';
 import { CloseIcon, SendIcon } from './icons/Icons';
-import Spinner from './ui/Spinner';
 import MarkdownMessage from './MarkdownMessage';
 import AnimatedMessage from './AnimatedMessage';
 
@@ -144,7 +143,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           {isAiThinking && (
             <AnimatedMessage delay={chatHistory.length * 100} className="flex justify-start">
               <div className="max-w-md px-4 py-3 rounded-lg inline-flex" style={{backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)'}}>
-                <Spinner className="w-5 h-5" />
+                Thinking...
               </div>
             </AnimatedMessage>
           )}
@@ -352,7 +351,7 @@ const ChatPanel: React.FC<ChatPanelProps> = ({
           {isAiThinking && (
             <div className="flex justify-start message-enter">
               <div className="w-full px-5 py-4 rounded-2xl message-bubble assistant inline-flex" style={{backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border-color)'}}>
-                <Spinner className="w-5 h-5" />
+                Thinking...
               </div>
             </div>
           )}

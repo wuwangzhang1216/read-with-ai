@@ -1,7 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { ChatMessage } from '../types';
 import { CloseIcon, SendIcon, ChevronDownIcon, ChevronRightIcon, EditIcon } from './icons/Icons';
-import Spinner from './ui/Spinner';
 import { ThoughtProcess, ToolUse } from '../services/enhancedRagService';
 import MarkdownMessage from './MarkdownMessage';
 import AnimatedMessage from './AnimatedMessage';
@@ -62,13 +61,11 @@ const ThinkingIndicator: React.FC<{
   }, [progress, isWriting, messageReceived, latestThought]);
   return (
     <div className="message-bubble assistant w-full">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium"
+      <div className="flex items-center justify-between mb-2">
+        <div className="status-indicator flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium"
              style={{ backgroundColor: 'rgba(44, 62, 80, 0.08)', color: '#2c3e50' }}>
-          <Spinner className="w-4 h-4 thinking-pulse" />
           <span className="flex items-center gap-1">
             {statusText}
-            <span className="codex-caret" aria-hidden> </span>
           </span>
           {thoughts.length > 0 && (
             <span className="opacity-70 ml-1">· Step {activeIndex + 1}</span>
@@ -88,38 +85,15 @@ const ThinkingIndicator: React.FC<{
         </button>
       </div>
 
-      {/* Codex-like token stream */}
-      <div className="codex-stream mb-3">
-        {Array.from({ length: 10 }).map((_, i) => (
-          <span key={i} className="bar" style={{ animationDelay: `${i * 80}ms` }} />
-        ))}
-      </div>
 
       {expanded && (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {thoughts.length > 0 && (
-            <ReasoningSteps thoughts={thoughts} activeIndex={activeIndex} />
+            <ReasoningSteps thoughts={thoughts} activeIndex={activeIndex} wavy />
           )}
         </div>
       )}
 
-      {/* Writing placeholder bubble to indicate composing (below reasoning) */}
-      {isWriting && hasReasoningStep && (
-        <div className="writing-bubble mb-3">
-          <div className="typing-row">
-            <span className="typing-dot" />
-            <span className="typing-dot" />
-            <span className="typing-dot" />
-            <span className="typing-label">Writing answer…</span>
-          </div>
-          <div className="skeleton-lines mt-3">
-            <div className="skeleton-line" style={{ width: '92%' }} />
-            <div className="skeleton-line" style={{ width: '86%' }} />
-            <div className="skeleton-line" style={{ width: '78%' }} />
-            <div className="skeleton-line" style={{ width: '64%' }} />
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -509,6 +483,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           color: var(--text-primary);
           border: 1px solid var(--border-color);
           box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+          padding: 16px;
         }
         /* Explicitly allow text selection inside assistant bubbles */
         .message-bubble.assistant, 
@@ -537,27 +512,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
 
-        /* Codex-style caret and token stream */
-        @keyframes caretBlink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-        .codex-caret {
-          width: 8px;
-          height: 1.1em;
-          border-left: 2px solid #2c3e50;
-          display: inline-block;
-          animation: caretBlink 1s steps(1) infinite;
-          transform: translateY(1px);
-        }
-        .codex-stream { display: flex; align-items: center; gap: 6px; padding: 0 2px; }
-        .codex-stream .bar {
-          width: 6px; height: 10px; border-radius: 2px;
-          background: linear-gradient(180deg, #2c3e50 0%, #8aa0b4 100%);
-          opacity: 0.6;
-          animation: streamPulse 900ms ease-in-out infinite;
-        }
-        @keyframes streamPulse {
-          0%, 100% { transform: scaleY(0.6); opacity: 0.4; }
-          50% { transform: scaleY(1.2); opacity: 1; }
-        }
+        /* Removed Codex caret and token stream styles */
 
         /* Enhanced message animations */
         .message-enter {
@@ -598,39 +553,6 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
           border: 1px solid var(--border-color);
         }
 
-        /* Writing placeholder bubble */
-        .writing-bubble {
-          background: linear-gradient(135deg, var(--bg-secondary) 0%, rgba(240, 237, 230, 0.95) 100%);
-          border: 1px solid var(--border-color);
-          border-radius: 14px;
-          padding: 12px 14px;
-        }
-        .typing-row { display: flex; align-items: center; gap: 8px; }
-        .typing-label { color: var(--text-secondary); font-size: 12px; font-weight: 500; }
-        .typing-dot {
-          width: 6px; height: 6px; border-radius: 9999px;
-          background: #2c3e50; opacity: 0.7;
-          animation: typingBounce 1.2s ease-in-out infinite;
-        }
-        .typing-dot:nth-child(1) { animation-delay: 0ms; }
-        .typing-dot:nth-child(2) { animation-delay: 150ms; }
-        .typing-dot:nth-child(3) { animation-delay: 300ms; }
-        @keyframes typingBounce {
-          0%, 80%, 100% { transform: translateY(0); opacity: 0.5; }
-          40% { transform: translateY(-4px); opacity: 1; }
-        }
-
-        .skeleton-lines { display: grid; gap: 10px; }
-        .skeleton-line {
-          height: 10px; border-radius: 6px;
-          background: linear-gradient(90deg, rgba(44,62,80,0.08) 0%, rgba(44,62,80,0.16) 50%, rgba(44,62,80,0.08) 100%);
-          background-size: 200% 100%;
-          animation: shimmer 1.1s linear infinite;
-        }
-        @keyframes shimmer {
-          0% { background-position: 200% 0; }
-          100% { background-position: -200% 0; }
-        }
 
         /* Enhanced input styling */
         .chat-input {
@@ -681,33 +603,82 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
         }
         .step-item {
           display: grid;
-          grid-template-columns: 20px 1fr;
-          gap: 10px;
+          grid-template-columns: 24px 1fr;
+          gap: 12px;
           align-items: start;
+          padding: 8px 0;
           opacity: 0;
           transform: translateY(6px);
           animation: fadeInUp 300ms ease forwards;
         }
+        /* Status indicator styling */
+        .status-indicator {
+          padding: 6px 12px !important;
+        }
+
         .step-dot {
-          width: 8px;
-          height: 8px;
-          border-radius: 9999px;
-          margin-top: 6px;
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
           background-color: var(--border-color);
+          margin-top: 4px;
+          padding: 2px;
+          position: relative;
+          z-index: 1;
         }
         .step-item.active .step-dot { background-color: #2c3e50; }
         .step-item.complete .step-dot { background-color: #2c3e50; opacity: 0.6; }
         .step-line {
-          grid-column: 1 / 2;
+          position: absolute;
+          left: 17px;
+          top: 18px;
           width: 2px;
           background-color: var(--border-color);
-          justify-self: center;
+          z-index: 0;
         }
         .step-title { font-weight: 600; color: var(--text-primary); }
         .step-sub { color: var(--text-secondary); opacity: 0.9; }
         @keyframes fadeInUp {
           from { opacity: 0; transform: translateY(6px); }
           to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* High-contrast left→right color sweep for active step (no movement) */
+        @keyframes shineSweep {
+          0%   { background-position: 0% 50%; }
+          100% { background-position: 200% 50%; }
+        }
+        .shine-text {
+          --shine-base: var(--text-primary);
+          --shine-highlight: #ffffff;
+          display: inline-block;
+          white-space: pre-wrap;
+          background-image: linear-gradient(
+            90deg,
+            var(--shine-base) 0%,
+            var(--shine-base) 35%,
+            var(--shine-highlight) 50%,
+            var(--shine-base) 65%,
+            var(--shine-base) 100%
+          );
+          background-size: 200% 100%;
+          background-position: 0% 50%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          color: transparent;
+          -webkit-text-fill-color: transparent;
+          animation: shineSweep 1.6s linear infinite;
+        }
+        .shine-primary { --shine-base: var(--text-primary); }
+        .shine-secondary { --shine-base: var(--text-secondary); }
+        .shine-subtle   { --shine-highlight: #f5f7fa; }
+        @media (prefers-reduced-motion: reduce) {
+          .shine-text {
+            animation: none !important;
+            background: none !important;
+            -webkit-text-fill-color: initial !important;
+            color: var(--shine-base) !important;
+          }
         }
 
         /* Reserved for future exit animations */
@@ -896,7 +867,7 @@ const EnhancedChatPanel: React.FC<EnhancedChatPanelProps> = ({
                   ) : (
                     <div className="relative">
                       <div className="whitespace-pre-wrap text-[15px] leading-relaxed font-medium">{msg.content}</div>
-                      <div className="absolute -top-2 -right-2">
+                      <div className="absolute top-1/2 right-0 transform -translate-y-1/2 -translate-x-1">
                         <button
                           disabled={isAiThinking}
                           onClick={() => onStartEditMessage(index, msg.content)}
@@ -975,7 +946,20 @@ export default EnhancedChatPanel;
 // Icons are imported from './icons/Icons'
 
 // Minimal, Codex-like step timeline for reasoning
-const ReasoningSteps: React.FC<{ thoughts: ThoughtProcess[]; activeIndex?: number }> = ({ thoughts, activeIndex }) => {
+// WavyText now renders a single element with a gradient shine sweeping left→right
+const WavyText: React.FC<{ text: string; className?: string; subtle?: boolean; durationMs?: number; delayStepMs?: number }>
+  = ({ text, className = '', subtle = false, durationMs = 1600 }) => {
+  return (
+    <span
+      className={`shine-text ${subtle ? 'shine-secondary shine-subtle' : 'shine-primary'} ${className}`.trim()}
+      style={{ animationDuration: `${durationMs}ms` }}
+    >
+      {text}
+    </span>
+  );
+};
+
+const ReasoningSteps: React.FC<{ thoughts: ThoughtProcess[]; activeIndex?: number; wavy?: boolean }> = ({ thoughts, activeIndex, wavy = false }) => {
   const last = typeof activeIndex === 'number' ? activeIndex : thoughts.length - 1;
   return (
     <div className="steps">
@@ -988,12 +972,24 @@ const ReasoningSteps: React.FC<{ thoughts: ThoughtProcess[]; activeIndex?: numbe
           <div>
             <div className="step-dot" />
             {idx < thoughts.length - 1 && (
-              <div className="step-line" style={{ height: 22 }} />
+              <div className="step-line" />
             )}
           </div>
           <div>
-            <div className="step-title text-sm">{`${idx + 1}. ${t.stage}`}</div>
-            <div className="step-sub text-sm">{t.thought}</div>
+            <div className="step-title text-sm">
+              {wavy && idx === last ? (
+                <WavyText text={`${idx + 1}. ${t.stage}`} />
+              ) : (
+                `${idx + 1}. ${t.stage}`
+              )}
+            </div>
+            <div className="step-sub text-sm">
+              {wavy && idx === last ? (
+                <WavyText text={t.thought || ''} />
+              ) : (
+                t.thought
+              )}
+            </div>
           </div>
         </div>
       ))}
