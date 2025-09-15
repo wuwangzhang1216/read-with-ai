@@ -4,15 +4,18 @@ export interface Chunk {
   pageNumber: number;
   content: string;
   embedding: number[];
+  metadata?: any;
 }
 
 export interface Book {
   id: string;
   title: string;
-  fileBuffer: ArrayBuffer;
-  pageCount: number;
-  fullText: string;
+  fileBuffer?: ArrayBuffer;
+  pageCount?: number;
+  totalPages?: number;
+  fullText?: string;
   chunks: Chunk[];
+  metadata?: any;
 }
 
 export interface ChatMessage {

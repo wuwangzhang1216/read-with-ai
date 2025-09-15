@@ -32,11 +32,15 @@ const Library: React.FC<LibraryProps> = ({ books, onAddBook, onSelectBook, onDel
 
     try {
       setProcessingStatus('Reading file...');
-      const fileBuffer = await file.arrayBuffer();
+      const originalBuffer = await file.arrayBuffer();
+
+      // Create a copy for PDF processing to avoid detaching the original
+      const processingBuffer = originalBuffer.slice(0);
+      // Keep another copy for storage
+      const fileBuffer = originalBuffer.slice(0);
 
       // Worker is already configured at module scope
-      // Slice to pass a copy, preserving the original buffer used by the viewer
-      const pdf = await getDocument({ data: fileBuffer.slice(0) }).promise;
+      const pdf = await getDocument({ data: processingBuffer }).promise;
       
       let fullText = '';
       const chunks: Omit<Chunk, 'id' | 'embedding'>[] = [];

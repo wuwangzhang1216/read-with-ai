@@ -34,6 +34,15 @@ const App: React.FC = () => {
     }
   };
 
+  const handleUpdateBooks = async () => {
+    try {
+      const storedBooks = await dbService.getBooks();
+      setBooks(storedBooks);
+    } catch (error) {
+      console.error("Failed to reload books:", error);
+    }
+  };
+
   const handleDeleteBook = async (bookId: string) => {
     try {
       await dbService.deleteBook(bookId);
@@ -64,7 +73,23 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen">
       {selectedBook ? (
-        <Reader book={selectedBook} onBackToLibrary={handleBackToLibrary} />
+        <Reader
+          book={selectedBook}
+          onBackToLibrary={handleBackToLibrary}
+          onSelectTranslatedBook={async (translatedBook: Book) => {
+            // Refresh the books list first
+            await handleUpdateBooks();
+
+            // Load the translated book from database to ensure we have a fresh copy
+            const freshBook = await dbService.getBook(translatedBook.id);
+            if (freshBook) {
+              setSelectedBook(freshBook);
+            } else {
+              // Fallback to the provided book if not found
+              setSelectedBook(translatedBook);
+            }
+          }}
+        />
       ) : (
         <Library
           books={books}

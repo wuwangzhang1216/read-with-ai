@@ -138,8 +138,33 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
     return { width: target, scale: zoom } as const;
   }, [fitMode, zoom, containerSize.width, containerSize.height]);
 
-  // Stable file/options to prevent unnecessary reloads
-  const fileSource = useMemo(() => ({ data: fileBuffer }), [fileBuffer]);
+  // Create a stable reference to the file buffer
+  const [fileSource, setFileSource] = useState<{ data: ArrayBuffer } | null>(null);
+
+  useEffect(() => {
+    if (!fileBuffer) {
+      console.error('No fileBuffer provided to PdfJsViewer');
+      setFileSource(null);
+      return;
+    }
+
+    // Check if buffer is valid before trying to use it
+    try {
+      // Test if buffer is detached by trying to get its byteLength
+      const length = fileBuffer.byteLength;
+      if (length > 0) {
+        // Create a copy to avoid detachment issues
+        const bufferCopy = fileBuffer.slice(0);
+        setFileSource({ data: bufferCopy });
+      } else {
+        console.error('FileBuffer has zero length');
+        setFileSource(null);
+      }
+    } catch (e) {
+      console.error('FileBuffer may be detached or invalid:', e);
+      setFileSource(null);
+    }
+  }, [fileBuffer]);
 
   return (
     <div
@@ -221,10 +246,15 @@ const PdfJsViewer: React.FC<PdfJsViewerProps> = ({ fileBuffer, title, currentPag
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '12px 0 40px 0' }} aria-label={title || 'PDF Document'}>
-        {!containerSize.width || !containerSize.height ? (
+        {!fileSource ? (
+          <div style={{ color: 'var(--accent-red)', padding: '24px' }}>
+            No PDF file available. The translated version may not have the original PDF attached.
+          </div>
+        ) : !containerSize.width || !containerSize.height ? (
           <div style={{ color: 'var(--text-secondary)', padding: '24px' }}>Preparing viewer…</div>
         ) : (
         <Document
+          key={fileSource ? 'pdf-loaded' : 'pdf-empty'} // Stable key to prevent re-renders
           file={fileSource}
           onLoadSuccess={(info) => setNumPages(info.numPages || 0)}
           onLoadError={(err) => console.error('Failed to load PDF with react-pdf:', err)}

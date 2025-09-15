@@ -6,12 +6,15 @@ import * as enhancedRagService from '../services/enhancedRagService';
 import * as dbService from '../services/dbService';
 import SelectionPopup from './SelectionPopup';
 import PdfJsViewer from './PdfJsViewer';
+import TranslatedPdfViewer from './TranslatedPdfViewer';
 import { createPortal } from 'react-dom';
 import { ThoughtProcess, ToolUse } from '../services/enhancedRagService';
+import TranslationPanel from './TranslationPanel';
 
 interface ReaderProps {
   book: Book;
   onBackToLibrary: () => void;
+  onSelectTranslatedBook?: (translatedBook: Book) => void | Promise<void>;
 }
 
 type SelectionAction = 'ask' | 'summarize' | 'explain';
@@ -38,8 +41,9 @@ type ThreadEphemeralState = {
   isDelayingStream: boolean;
 };
 
-const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
+const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary, onSelectTranslatedBook }) => {
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isTranslationOpen, setIsTranslationOpen] = useState(false);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string>('');
   const [threadStates, setThreadStates] = useState<Record<string, ThreadEphemeralState>>({});
@@ -738,7 +742,19 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             </button>
             <h1 className="ml-4 text-xl font-semibold truncate" style={{ color: 'var(--text-primary)'}}>{book.title}</h1>
         </div>
-        <div className="flex items-center gap-2" />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsTranslationOpen(true)}
+            className="p-2 rounded-full hover:bg-gray-200/60 transition-colors"
+            aria-label="Translate book"
+            title="Translate book"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+            </svg>
+          </button>
+        </div>
       </header>
       
       <div className="flex-grow relative min-h-0 overflow-hidden flex">
@@ -762,9 +778,10 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             width: isChatOpen ? 'calc(100% - 520px)' : '100%'
           }}
         >
-          {/* Embed PDF.js viewer */}
-          <PdfJsViewer
-            fileBuffer={book.fileBuffer}
+          {/* Use TranslatedPdfViewer for both translated and original books */}
+          <TranslatedPdfViewer
+            key={book.id} // Force remount when book changes to avoid ArrayBuffer issues
+            book={book}
             title={book.title}
             currentPage={currentPage}
             onPageChange={(p) => setCurrentPage(p)}
@@ -858,6 +875,21 @@ const Reader: React.FC<ReaderProps> = ({ book, onBackToLibrary }) => {
             />
         </div>
       </div>
+
+      {/* Translation Panel */}
+      <TranslationPanel
+        book={book}
+        isOpen={isTranslationOpen}
+        onClose={() => setIsTranslationOpen(false)}
+        onTranslationComplete={(translatedBook) => {
+          console.log('Translation completed:', translatedBook.title);
+          setIsTranslationOpen(false);
+          // Automatically open the translated book
+          if (onSelectTranslatedBook) {
+            onSelectTranslatedBook(translatedBook);
+          }
+        }}
+      />
     </div>
   );
 };
