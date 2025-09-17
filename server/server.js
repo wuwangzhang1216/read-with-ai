@@ -397,7 +397,9 @@ app.post('/api/translate-pdf-python', upload.single('pdf'), async (req, res) => 
     const pdfBase64 = pdfBuffer.toString('base64');
 
     // Call Python translation service
-    const python = spawn('python3', [
+    // Use 'python' on Windows, 'python3' on Unix-like systems
+    const pythonCommand = process.platform === 'win32' ? 'python' : 'python3';
+    const python = spawn(pythonCommand, [
       path.join(__dirname, 'pdf_translator.py'),
       '-'  // Use stdin for input
     ]);
